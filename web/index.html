@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TikPrint</title>
+<style>
+:root{
+  --bg:#e8e7e4; --dot:#9c9a95; --dot-hot:#6a6864;
+  --ink:#1c1c1e; --muted:#7a7873; --line:#d2d0cb;
+  --card:#f4f3f0; --hover:rgba(28,28,30,.05);
+  --btn:#1c1c1e; --btn-ink:#fff; --ok:#2e9d5b;
+  --paper:#fff; --paper-ink:#111;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#141517; --dot:#4a4d52; --dot-hot:#7d8086;
+  --ink:#ececec; --muted:#8e9095; --line:#2f3236;
+  --card:#1e2023; --hover:rgba(255,255,255,.06);
+  --btn:#ececec; --btn-ink:#141517; --paper:#f6f5f2;
+}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.4 var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh}
+button,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+#grid{position:fixed;inset:0;width:100vw;height:100vh;z-index:0;pointer-events:none}
+
+/* ---------- Transparent menu bar ---------- */
+.menubar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:6px;padding:14px 20px;transition:background .2s}
+.logo{display:flex;align-items:center;gap:8px;font:600 15px var(--sans);letter-spacing:-.01em;margin-right:auto}
+.mitem{background:transparent;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 11px;border-radius:8px;font-size:14px;color:var(--muted)}
+.mitem:hover,.mitem.on{color:var(--ink);background:transparent}
+.led{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.led.off{background:none;border:1.5px solid var(--muted)}
+
+/* ---------- Main ---------- */
+main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;padding:96px 20px 80px}
+
+/* the ticket you type on */
+.paper{width:340px;background:var(--paper);color:var(--paper-ink);padding:18px 18px 26px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .8s cubic-bezier(.5,0,.3,1),opacity .35s}
+.paper::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:8px;background:linear-gradient(135deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x,linear-gradient(225deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x}
+.paper.out{transform:translateY(-40px);opacity:0}
+.p-head{display:flex;justify-content:space-between;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
+.paper textarea{display:block;width:100%;border:0;outline:none;resize:none;background:none;padding:0;color:inherit;font-family:inherit;overflow:hidden}
+#tTitle{font-weight:700;font-size:22px;line-height:1.2;margin-top:14px}
+#tBody{font-size:15px;line-height:1.4;margin-top:6px;min-height:66px}
+.paper textarea::placeholder{color:#bbb}
+.p-img{position:relative;margin-top:10px;display:none}
+.p-img.on{display:block}
+/* 288px = half of the printer's 576 dots, so on a 2x screen one printer dot is exactly one screen pixel */
+.p-img canvas{display:block;width:288px;max-width:100%;margin:0 auto}
+.p-img .p-wait{display:none;padding:26px 0;text-align:center;font:600 12px Helvetica,Arial,sans-serif;color:#999}
+.p-img.busy canvas,.p-img.busy .p-note,.p-img.busy .p-nav{display:none}
+.p-img.turning canvas{opacity:.3}
+.p-nav{display:none;margin-top:10px;align-items:center;justify-content:center;gap:10px;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#666}
+.p-nav.on{display:flex}
+.p-nav button{font:700 18px/1 Helvetica,Arial,sans-serif;padding:4px 10px;color:#444;border-radius:6px}
+.p-nav button:disabled{opacity:.25}
+.p-img.busy .p-wait{display:block}
+.p-note{margin-top:8px;text-align:center;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
+.p-note:empty{display:none}
+.p-img>button{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;font-size:12px;line-height:22px}
+.p-src{display:none;margin-top:10px;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
+.p-src.on{display:flex;justify-content:space-between}
+.p-src button{color:#999;font:inherit}
+
+/* upload area */
+.drop{width:340px;margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
+.drop:hover,.drop.over{border-color:var(--ink);color:var(--ink)}
+.drop input{display:none}
+
+/* action row */
+.row{width:340px;margin-top:12px;display:flex;align-items:center;gap:8px}
+.dd{position:relative}
+.ddbtn{height:40px;padding:0 12px 0 14px;border:1px solid var(--line);border-radius:10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;background:var(--bg)}
+.ddbtn:hover,.dd.open .ddbtn{border-color:var(--ink)}
+.menu{position:absolute;top:calc(100% + 6px);left:0;min-width:230px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.12);display:none;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);z-index:5}
+.dd.open .menu,.pop.open{display:block;animation:pop .14s ease}
+@keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.mi{width:100%;white-space:nowrap;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;font-size:14px;text-align:left}
+.mi:hover{background:var(--hover)}
+.mi .ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:700 11px var(--sans);color:#fff;flex:none}
+.mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
+.mi .r.ok{color:var(--ok)}
+.sep{height:1px;background:var(--line);margin:5px 4px}
+.print{margin-left:auto;height:40px;padding:0 20px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.print:disabled{opacity:.4;cursor:default}
+
+/* ---------- Popovers from menu bar ---------- */
+.pop{position:fixed;top:56px;right:20px;z-index:11;width:300px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.14);display:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.pop h3{font-size:13px;font-weight:600;color:var(--muted);margin:6px 10px 6px}
+.net .mi .bars{display:inline-flex;gap:2px;align-items:flex-end}
+.net .mi .bars i{width:3px;background:currentColor;border-radius:1px}
+.net.dim .mi{opacity:.4;cursor:default}
+.net.dim .mi:hover{background:none}
+.pw{display:none;gap:6px;padding:2px 6px 8px}
+.net.open .pw{display:flex}
+.pw input{flex:1;min-width:0;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 10px;background:transparent;outline:none}
+.pw input:focus{border-color:var(--ink)}
+.pw input.bad{border-color:#c2412d}
+.pw button{height:34px;padding:0 12px;border-radius:8px;background:var(--btn);color:var(--btn-ink);font-weight:600;font-size:13px}
+.spin{width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+.ok-state{display:none;padding:14px 10px 10px;text-align:center}
+.ok-state .c{width:36px;height:36px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;margin:0 auto 10px}
+.ok-state b{display:block;font-size:15px}
+.ok-state code{display:inline-block;margin-top:8px;font:13px var(--mono);padding:6px 10px;border:1px dashed var(--line);border-radius:8px}
+.ok-state .link{display:block;margin:12px auto 0;color:var(--muted);font-size:13px}
+.kv{display:flex;justify-content:space-between;padding:9px 10px;font-size:14px}
+.kv span:last-child{color:var(--muted);font:13px var(--mono)}
+.note{display:flex;align-items:center;gap:8px;padding:9px 10px;font-size:14px;color:var(--muted)}
+.ok-state .link+.link{margin-top:6px}
+
+.toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* ---------- Disconnected screen ---------- */
+#offline{position:fixed;inset:0;z-index:5;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center}
+#offline .card{background:var(--bg);padding:22px 28px;border-radius:14px;display:flex;flex-direction:column;align-items:center;gap:10px}
+#offline svg{color:var(--muted)}
+#offline b{font-size:17px;font-weight:600;letter-spacing:-.01em}
+#offline span{color:var(--muted);font-size:14px;max-width:260px}
+body.offline #offline{display:flex}
+body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .toast{display:none!important}
+
+@media (max-width:420px){ .paper,.drop,.row{width:100%} .menubar .mitem .t{display:none} }
+</style>
+</head>
+<body>
+<canvas id="grid" aria-hidden="true"></canvas>
+
+<!-- Transparent menu bar -->
+<header class="menubar" id="bar">
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="8" width="18" height="9" rx="2.5"/><path d="M7 8V4h10v4"/><path d="M7 14h10v7l-2.5-1.3L12 21l-2.5-1.3L7 21z"/></svg>
+    TikPrint
+  </div>
+  <span class="mitem" id="usbItem" title="USB-C"><span class="led off" id="usbLed"></span><span class="t">USB-C</span></span>
+  <button class="mitem" id="wifiBtn"><span class="led off" id="wifiLed"></span><span class="t" id="wifiLabel">Set up Wi-Fi</span></button>
+  <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+</header>
+
+<!-- Wi-Fi popover -->
+<div class="pop" id="wifiPop">
+  <div id="netList">
+    <h3>Wi-Fi</h3>
+    <div id="nets"></div>
+  </div>
+  <div class="ok-state" id="wifiOk">
+    <div class="c"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+    <b id="okName"></b>
+    <code id="okHost">tikprint.local</code><br>
+    <code id="okIp"></code>
+    <button class="link" id="changeNet">Change network</button>
+    <button class="link" id="forgetNet">Forget this network</button>
+  </div>
+</div>
+
+<!-- Settings popover -->
+<div class="pop" id="gearPop">
+  <div class="kv"><span>Name</span><span id="setName">tikprint.local</span></div>
+  <div class="kv"><span>USB-C</span><span id="setUsb">192.168.7.1</span></div>
+  <div class="kv"><span>PIN</span><span>Off</span></div>
+  <div class="kv"><span>Firmware</span><span id="setFw"></span></div>
+</div>
+
+<main>
+  <!-- The ticket is the editor -->
+  <div class="paper" id="paper">
+    <div class="p-head"><span>TIKPRINT</span><span id="date"></span></div>
+    <textarea id="tTitle" rows="1" placeholder="Title"></textarea>
+    <textarea id="tBody" rows="3" placeholder="Write something…"></textarea>
+    <div class="p-img" id="pImg"><canvas id="prev" width="576" height="1" role="img" aria-label="Exactly what will print"></canvas><div class="p-wait" id="pWait">Preparing…</div><div class="p-nav" id="pNav"><button id="pPrev" aria-label="Previous part">‹</button><span id="pPart"></span><button id="pNext" aria-label="Next part">›</button></div><div class="p-note" id="pNote"></div><button id="rmImg" aria-label="Remove file">✕</button></div>
+    <div class="p-src" id="pSrc"><span id="srcName"></span><button id="rmSrc">clear</button></div>
+  </div>
+
+  <!-- Upload area -->
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="image/jpeg,image/png,application/pdf">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+    Drop JPG, PNG, or PDF
+  </label>
+
+  <!-- Connectors + Print -->
+  <div class="row">
+    <div class="dd" id="conn">
+      <button class="ddbtn" id="connBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>
+        Connectors
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="menu">
+        <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r ok">Today</span></button>
+        <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Connect</span></button>
+        <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Connect</span></button>
+        <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r ok">Ann Arbor</span></button>
+        <div class="sep"></div>
+        <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
+      </div>
+    </div>
+    <button class="print" id="printBtn">Print</button>
+  </div>
+</main>
+
+<!-- Shown when the board stops answering (cable unplugged, power off, Wi-Fi lost) -->
+<div id="offline" role="status" aria-live="polite">
+  <div class="card">
+    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="9" rx="2.5"/><path d="M7 8V4h10v4"/><path d="M4 21 20 3"/></svg>
+    <b>Printer disconnected</b>
+    <span id="offlineHint">Plug the USB-C cable back in. This page reconnects on its own.</span>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- Dot grid (same as the assembly page) ---------- */
+(() => {
+  const c=document.getElementById('grid'), g=c.getContext('2d');
+  const m={x:-9999,y:-9999,sx:-9999,sy:-9999,active:0};
+  let base=[0,0,0],hot=[0,0,0],W=0,H=0,dpr=1; const SP=16,R=150;
+  const SOLID='.paper,.drop,.ddbtn,.print,.pop.open,.dd.open .menu,.toast.on,body.offline #offline .card';
+  const hex=v=>{v=v.trim().replace('#','');return[0,2,4].map(i=>parseInt(v.slice(i,i+2),16))};
+  const colors=()=>{const s=getComputedStyle(document.documentElement);base=hex(s.getPropertyValue('--dot'));hot=hex(s.getPropertyValue('--dot-hot'))};
+  const size=()=>{dpr=Math.min(devicePixelRatio,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr};
+  (function draw(){
+    g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
+    m.sx+=(m.x-m.sx)*.18;m.sy+=(m.y-m.sy)*.18;
+    const ox=(W%SP)/2,oy=(H%SP)/2;
+    // objects the dots stop at (with a small gap so they end cleanly at the edge)
+    const GAP=5, rects=[...document.querySelectorAll(SOLID)].filter(el=>el.offsetParent||getComputedStyle(el).position==='fixed').map(el=>{const r=el.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:r.bottom+(el.id==='paper'?8:0),width:r.width,height:r.height}}).filter(r=>r.width&&r.height);
+    const blocked=(px,py)=>rects.some(r=>px>r.left-GAP&&px<r.right+GAP&&py>r.top-GAP&&py<r.bottom+GAP);
+    for(let y=oy;y<H+SP;y+=SP)for(let x=ox;x<W+SP;x+=SP){
+      const dx=x-m.sx,dy=y-m.sy,d=Math.hypot(dx,dy);
+      let a=Math.max(0,1-d/R);a=a*a*(3-2*a)*m.active;
+      const p=a*7,px=d>0?x+dx/d*p:x,py=d>0?y+dy/d*p:y;
+      if(blocked(px,py))continue;
+      const col=base.map((v,i)=>Math.round(v+(hot[i]-v)*a*.85));
+      g.fillStyle=`rgba(${col[0]},${col[1]},${col[2]},${.22+a*.38})`;
+      g.beginPath();g.arc(px,py,1+a*1.3,0,Math.PI*2);g.fill();
+    }
+    requestAnimationFrame(draw);
+  })();
+  addEventListener('pointermove',e=>{m.x=e.clientX;m.y=e.clientY;if(m.sx<-5000){m.sx=m.x;m.sy=m.y}m.active=1},{passive:true});
+  document.addEventListener('pointerleave',()=>m.active=0);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change',colors);
+  addEventListener('resize',size); colors(); size();
+})();
+
+const $=id=>document.getElementById(id);
+let ticket=1, wifi=null;
+const pad=n=>'#'+String(n).padStart(4,'0');
+/* Top-right corner of the ticket: today's date, e.g. NOV 18, 2026 (from this device's clock; the board has none). */
+const showDate=()=>{$('date').textContent=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}).toUpperCase()};
+showDate();
+const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path,body,ms=4000){
+  const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),ms);
+  try{
+    const r=await fetch(path,{signal:ctl.signal,cache:'no-store',...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
+    return await r.json();
+  }finally{clearTimeout(timer)}
+}
+
+/* ---------- Status (menu bar, ticket number, settings) ---------- */
+let viaUsb=false, scanning=false, printing=false;
+function applyStatus(s){
+  viaUsb=s.via==='usb';
+  $('usbLed').classList.toggle('off',!viaUsb);
+  $('usbItem').title=viaUsb?'Connected over USB-C':(s.usb_connected?'USB-C is plugged into a computer':'USB-C not connected');
+  wifi=s.wifi?s.wifi.ssid:null;
+  $('wifiLed').classList.toggle('off',!s.wifi);
+  $('wifiLabel').textContent=s.wifi?'Wi-Fi':(s.wifi_connecting?'Connecting…':'Set up Wi-Fi');
+  $('wifiBtn').title=s.wifi?`${s.wifi.ssid} · ${s.wifi.ip}`:'';
+  ticket=s.ticket_count+1; showDate();
+  $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip; $('setFw').textContent='v'+s.version;
+  $('okHost').textContent=s.hostname;
+  if(s.wifi&&!joining){$('okName').textContent=s.wifi.ssid;$('okIp').textContent=s.wifi.ip}
+  return s;
+}
+let joining=false, misses=0, offline=false;
+function setOffline(on){
+  if(on===offline)return; offline=on;
+  if(on){
+    closeAll(null);
+    $('offlineHint').textContent=(viaUsb?'Plug the USB-C cable back in.':'Check that the printer has power and is on Wi-Fi.')+' This page reconnects on its own.';
+  }
+  document.body.classList.toggle('offline',on);
+}
+async function refreshStatus(){
+  try{const s=applyStatus(await api('/api/status',undefined,2500));misses=0;setOffline(false);return s}
+  catch(e){return null}
+}
+/* Heartbeat: a tiny ping every 0.3 s so unplugging shows up right away.
+   - The request fails outright (network gone)  -> disconnected immediately.
+   - The request just gets no answer in 0.7 s   -> disconnected after two in a row
+     (the board may only be busy for a moment). */
+async function ping(){
+  const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),700);
+  try{await fetch('/api/ping',{signal:ctl.signal,cache:'no-store'});return 'ok'}
+  catch(e){return e.name==='AbortError'?'slow':'gone'}
+  finally{clearTimeout(timer)}
+}
+let beats=0;
+(async function beat(){
+  if(!joining&&!scanning&&!printing){
+    const r=await ping();
+    if(r==='ok'){
+      misses=0;
+      if(offline||beats++%7===0)await refreshStatus();  // full status every ~2 s, and right after coming back
+    }else if(r==='gone'||++misses>=2)setOffline(true);
+  }
+  setTimeout(beat,300);
+})();
+
+/* menu bar goes frosted only once you scroll */
+addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{passive:true});
+
+/* auto-grow textareas */
+function grow(t){t.style.height='auto';t.style.height=t.scrollHeight+'px'}
+['tTitle','tBody'].forEach(id=>{$(id).addEventListener('input',e=>grow(e.target));grow($(id))});
+$('tTitle').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.metaKey&&!e.ctrlKey){e.preventDefault();$('tBody').focus()}});
+
+/* popovers + dropdown */
+function closeAll(except){
+  ['wifiPop','gearPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
+  if(except!=='conn')$('conn').classList.remove('open');
+  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop');
+}
+$('wifiBtn').onclick=e=>{e.stopPropagation();const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
+$('gearBtn').onclick=e=>{e.stopPropagation();const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
+$('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);$('conn').classList.toggle('open',o)};
+document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(null)});
+
+/* ---------- Wi-Fi ---------- */
+let NETS=[];
+const level=rssi=>rssi>=-60?3:rssi>=-72?2:1;
+const bars=n=>`<span class="bars">${[5,8,11].map((h,i)=>`<i style="height:${h}px;opacity:${i<n?1:.25}"></i>`).join('')}</span>`;
+function showList(on){$('netList').style.display=on?'':'none';$('wifiOk').style.display=on?'none':'block'}
+function renderNets(){
+  $('nets').innerHTML=NETS.length?NETS.map((x,i)=>`
+  <div class="net ${x.enterprise?'dim':''}" data-i="${i}">
+    <button class="mi">${bars(level(x.rssi))}${esc(x.ssid)}<span class="r">${x.enterprise?'Not supported':(x.secure?'🔒':'')}</span></button>
+    ${x.enterprise?'':`<div class="pw">${x.secure?'<input type="password" placeholder="Password" autocomplete="off">':'<span class="note" style="flex:1;padding:0 4px">Open network</span>'}<button class="join">Join</button></div>`}
+  </div>`).join(''):'<div class="note">No networks found</div>';
+}
+async function scan(){
+  if(scanning)return; scanning=true;
+  if(!NETS.length)$('nets').innerHTML='<div class="note"><span class="spin"></span>Scanning…</div>';
+  try{
+    const r=await api('/api/wifi/scan',undefined,15000);
+    if(Array.isArray(r)&&!document.querySelector('.net.open')){NETS=r;renderNets()}
+    else if(!Array.isArray(r)&&!NETS.length)$('nets').innerHTML='<div class="note">Scan failed. Try again.</div>';
+  }catch(e){if(!NETS.length)$('nets').innerHTML='<div class="note">Can’t reach the printer</div>'}
+  scanning=false;
+}
+async function openWifi(){
+  const s=await refreshStatus();
+  if(s&&s.wifi){showList(false)}else{showList(true);scan()}
+}
+$('nets').addEventListener('click',e=>{
+  const net=e.target.closest('.net'); if(!net||net.classList.contains('dim'))return;
+  if(e.target.closest('.mi')){document.querySelectorAll('.net').forEach(n=>n.classList.toggle('open',n===net&&!n.classList.contains('open')));net.querySelector('input')?.focus()}
+  if(e.target.closest('.join'))join(net);
+});
+$('nets').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.closest('.net'))join(e.target.closest('.net'))});
+async function join(net){
+  if(joining)return;
+  const x=NETS[+net.dataset.i],inp=net.querySelector('input'),btn=net.querySelector('.join');
+  if(inp&&inp.value.length<8){inp.classList.add('bad');inp.focus();return}
+  inp?.classList.remove('bad');btn.innerHTML='<span class="spin"></span>';joining=true;
+  let r;
+  try{r=await api('/api/wifi/connect',{ssid:x.ssid,password:inp?inp.value:''},35000)}
+  catch(e){
+    // If this page is being used over Wi-Fi, the board just left that network. Check what happened.
+    await new Promise(f=>setTimeout(f,2500)); const s=await refreshStatus();
+    r=(s&&s.wifi&&s.wifi.ssid===x.ssid)?{ok:true,ssid:x.ssid,ip:s.wifi.ip}:{ok:false,error:'lost'};
+  }
+  joining=false;btn.textContent='Join';
+  if(r.ok){
+    if(inp)inp.value='';
+    wifi=r.ssid;$('okName').textContent=r.ssid;$('okIp').textContent=r.ip;showList(false);
+    $('wifiLed').classList.remove('off');$('wifiLabel').textContent='Wi-Fi';
+  }else if(r.error==='wrong_password'&&inp){inp.classList.add('bad');inp.focus();inp.select()}
+  else toast(r.error==='not_found'?'Network not found':r.error==='lost'?'Lost contact with the printer':'Couldn’t join. Try again.');
+  refreshStatus();
+}
+$('changeNet').onclick=()=>{showList(true);scan()};
+$('forgetNet').onclick=async()=>{
+  try{await api('/api/wifi/forget',{})}catch(e){}
+  NETS=[];toast('Network forgotten');await refreshStatus();showList(true);scan();
+};
+
+/* ---------- Upload area ---------- */
+/* The printer is 576 dots wide and each dot is either black or white.
+   The browser turns the file into exactly those dots, shows them on the ticket,
+   and sends the very same dots to the board. So the preview IS the print.
+   Everything here is fixed arithmetic: the same file always gives the same dots. */
+const PW=576, PMAXH=4096;
+/* Numbers to tune once the real printer is here */
+const TRIM_WHITE=245;   // lighter than this (0-255) counts as blank paper when trimming margins
+const TRIM_PAD=8;       // dots of blank margin kept around the content after trimming
+const CLIP_DARK=.001;   // auto-levels: the darkest 0.1% of pixels become pure black
+const CLIP_LIGHT=.01;   // auto-levels: the lightest 1% become pure white (cleans up grey paper in scans)
+const DOC_SHARE=.9;     // if 90% of pixels are nearly black or nearly white, treat as a document (text, line art)
+const DOC_CUT=150;      // document: darker than this becomes a black dot (above 128 keeps thin strokes)
+const SHARPEN=.6;       // edge boost before turning greys into dots (0 = off)
+const PHOTO_GAMMA=.8;   // photo: below 1 brightens mid-greys, because thermal dots spread and print darker
+const PDF_PAGES=300;    // most pages of a PDF we will read
+const DOTS_PER_MM=8;    // 203 dots per inch
+let imgBits=null;       // the dots on the ticket right now: {height, data: Uint8Array of 72 bytes per row, 1 = black}
+/* The uploaded file. One print can be at most PMAXH rows (about 51 cm), so a long file is
+   split into "parts" that each fit; you flip through them and print them one after another.
+   {parts:[{rows, label, bits}], cur, rows (whole file), note, render(part) → canvas, close()} */
+let job=null;
+let loadId=0;           // goes up on every upload/removal, so a slow file can't overwrite a newer one
+
+const mkCanvas=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c};
+/* Draw part of a picture into a w×h canvas on white. Big reductions go in halving steps,
+   which stays sharp in every browser. */
+function resample(src,sx,sy,sw,sh,w,h){
+  while(sw>w*2){
+    const nw=Math.ceil(sw/2), nh=Math.max(1,Math.ceil(sh/2)), c=mkCanvas(nw,nh), g=c.getContext('2d');
+    g.fillStyle='#fff'; g.fillRect(0,0,nw,nh); g.drawImage(src,sx,sy,sw,sh,0,0,nw,nh);
+    src=c; sx=0; sy=0; sw=nw; sh=nh;
+  }
+  const c=mkCanvas(w,h), g=c.getContext('2d',{willReadFrequently:true});
+  g.fillStyle='#fff'; g.fillRect(0,0,w,h);            // transparent areas print as white paper
+  g.imageSmoothingQuality='high'; g.drawImage(src,sx,sy,sw,sh,0,0,w,h);
+  return c;
+}
+function greys(c){
+  const w=c.width, h=c.height, px=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data, v=new Float32Array(w*h);
+  for(let i=0;i<w*h;i++)v[i]=.299*px[i*4]+.587*px[i*4+1]+.114*px[i*4+2];
+  return v;
+}
+/* Where the content is: the box around everything that isn't blank paper, as fractions (0-1) of the canvas. */
+function contentBox(c){
+  const w=c.width, h=c.height, v=greys(c); let l=w, r=-1, t=h, b=-1;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)if(v[y*w+x]<TRIM_WHITE){ if(x<l)l=x; if(x>r)r=x; if(y<t)t=y; b=y; }
+  return r<0?null:{l:l/w,r:(r+1)/w,t:t/h,b:(b+1)/h};
+}
+/* Greys → dots. c must be PW wide. */
+function rasterize(c){
+  const h=c.height, n=PW*h, v=greys(c);
+  // 1. auto-levels
+  const hist=new Uint32Array(256); for(let i=0;i<n;i++)hist[v[i]|0]++;
+  let lo=0, hi=255, acc=0;
+  for(acc=0;lo<255&&(acc+=hist[lo])<=n*CLIP_DARK;)lo++;
+  for(acc=0;hi>0&&(acc+=hist[hi])<=n*CLIP_LIGHT;)hi--;
+  if(hi-lo>=48){const k=255/(hi-lo); for(let i=0;i<n;i++){const x=(v[i]-lo)*k; v[i]=x<0?0:x>255?255:x}}
+  // 2. document or photo?
+  let ends=0; for(let i=0;i<n;i++)if(v[i]<48||v[i]>207)ends++;
+  const doc=ends>=n*DOC_SHARE;
+  // 3. sharpen (compare each pixel with the average of its 4 neighbours)
+  if(SHARPEN){
+    const s=new Float32Array(n);
+    for(let y=0;y<h;y++)for(let x=0;x<PW;x++){
+      const i=y*PW+x, a=(v[x?i-1:i]+v[x<PW-1?i+1:i]+v[y?i-PW:i]+v[y<h-1?i+PW:i])/4, z=v[i]+SHARPEN*(v[i]-a);
+      s[i]=z<0?0:z>255?255:z;
+    }
+    v.set(s);
+  }
+  const out=new Uint8Array(PW/8*h), dot=(x,y)=>{out[y*(PW/8)+(x>>3)]|=0x80>>(x&7)};
+  if(doc){
+    // 4a. document: a clean cut keeps text edges crisp
+    for(let y=0;y<h;y++)for(let x=0;x<PW;x++)if(v[y*PW+x]<DOC_CUT)dot(x,y);
+  }else{
+    // 4b. photo: brighten, then Floyd–Steinberg dithering (greys become patterns of dots),
+    //     zig-zagging left-right then right-left so the patterns don't form streaks
+    for(let i=0;i<n;i++)v[i]=255*Math.pow(v[i]/255,PHOTO_GAMMA);
+    for(let y=0;y<h;y++){
+      const d=y&1?-1:1;
+      for(let x=d>0?0:PW-1;x>=0&&x<PW;x+=d){
+        const i=y*PW+x, old=v[i], val=old<128?0:255, err=old-val, fwd=x+d>=0&&x+d<PW, back=x-d>=0&&x-d<PW;
+        if(!val)dot(x,y);
+        if(fwd)v[i+d]+=err*7/16;
+        if(y+1<h){ if(back)v[i+PW-d]+=err*3/16; v[i+PW]+=err*5/16; if(fwd)v[i+PW+d]+=err/16; }
+      }
+    }
+  }
+  return {height:h,data:out};
+}
+/* Paint the dots on the ticket. White dots stay see-through so the paper colour shows. */
+function showBits(b){
+  const c=$('prev'); c.height=b.height;
+  const g=c.getContext('2d'), im=g.createImageData(PW,b.height), d=im.data;
+  for(let y=0;y<b.height;y++)for(let x=0;x<PW;x++)if(b.data[y*(PW/8)+(x>>3)]&(0x80>>(x&7))){const i=(y*PW+x)*4; d[i]=d[i+1]=d[i+2]=17; d[i+3]=255}
+  g.putImageData(im,0,0);
+}
+
+/* Split a list of pieces (each {h: rows}) into parts of at most PMAXH rows. */
+function pack(segs){
+  const parts=[]; let cur=null;
+  for(const g of segs){ if(!cur||cur.rows+g.h>PMAXH)parts.push(cur={segs:[],rows:0,label:'',bits:null}); cur.segs.push(g); cur.rows+=g.h; }
+  return parts;
+}
+
+/* A picture: trim blank margins, fit to the paper width. */
+function pictureJob(im){
+  const W=im.naturalWidth, H=im.naturalHeight; let sx=0, sy=0, sw=W, sh=H, whole=null;
+  const fullH=Math.round(H*PW/W);
+  if(fullH>=1&&fullH<=PMAXH*4){
+    whole=resample(im,0,0,W,H,PW,fullH);
+    const box=contentBox(whole);
+    if(box&&(box.r-box.l<.97||box.b-box.t<.97)){
+      const pad=TRIM_PAD/PW*(box.r-box.l)*W;   // TRIM_PAD dots, measured in the picture's own pixels
+      sx=Math.max(0,box.l*W-pad); sy=Math.max(0,box.t*H-pad);
+      sw=Math.min(W,box.r*W+pad)-sx; sh=Math.min(H,box.b*H+pad)-sy; whole=null;
+    }
+  }
+  const rows=Math.max(1,Math.round(sh*PW/sw)), segs=[];
+  for(let y=0;y<rows;y+=PMAXH)segs.push({y,h:Math.min(PMAXH,rows-y)});   // a very tall picture becomes several parts
+  const parts=pack(segs), k=sw/PW;                                       // k = picture pixels per printer dot
+  return {parts,rows,note:'',render:async p=>{
+    const g=p.segs[0];
+    return whole&&parts.length===1?whole:resample(im,sx,sy+g.y*k,sw,Math.min(g.h*k,sh-g.y*k),PW,g.h);
+  }};
+}
+const decodeImage=file=>new Promise((ok,no)=>{
+  const im=new Image(), u=URL.createObjectURL(file);
+  im.onload=()=>{URL.revokeObjectURL(u);ok(im)}; im.onerror=()=>{URL.revokeObjectURL(u);no(new Error('image'))}; im.src=u;
+});
+
+/* A PDF: pdf.js (in /vendor, served by the board) draws each page; we trim the margins
+   and stack the pages. Loaded only when the first PDF is dropped. */
+const PDFJS='4.10.38'; let pdfLib=null;
+async function pdfJob(file,alive,progress){
+  if(!pdfLib){
+    pdfLib=await import('/vendor/pdf.min.mjs?v='+PDFJS);
+    pdfLib.GlobalWorkerOptions.workerSrc='/vendor/pdf.worker.min.mjs?v='+PDFJS;
+  }
+  const doc=await pdfLib.getDocument({data:await file.arrayBuffer()}).promise;
+  const draw=async(n,scale)=>{
+    const page=await doc.getPage(n), vp=page.getViewport({scale}), c=mkCanvas(Math.ceil(vp.width),Math.ceil(vp.height));
+    await page.render({canvasContext:c.getContext('2d',{willReadFrequently:true}),viewport:vp}).promise;
+    page.cleanup(); return c;
+  };
+  try{
+    // Pass 1: draw every page small, to find where its content is. This also tells us the paper length.
+    const N=doc.numPages, n=Math.min(N,PDF_PAGES), pages=[]; let L=1, R=0;
+    for(let i=1;i<=n;i++){
+      if(n>3)progress(`Reading page ${i} of ${n}…`);
+      const vp=(await doc.getPage(i)).getViewport({scale:1}), box=contentBox(await draw(i,PW/vp.width));
+      if(!alive()){doc.destroy();return null}
+      if(box){ L=Math.min(L,box.l); R=Math.max(R,box.r); pages.push({i,w:vp.width,h:vp.height,box}); }
+    }
+    progress('Preparing…');
+    // Use the same left/right crop on every page so the text is one size throughout. Zoom at most 4x.
+    if(R-L<.25){const m=(L+R)/2; L=Math.max(0,Math.min(.75,m-.125)); R=L+.25}
+    // Work out where each page's content will sit at the final size
+    const segs=[];
+    for(const pg of pages){
+      const scale=(PW-2*TRIM_PAD)/((R-L)*pg.w), bw=Math.ceil(pg.w*scale), bh=Math.ceil(pg.h*scale);
+      const top=Math.max(0,Math.floor(pg.box.t*bh)-TRIM_PAD), bot=Math.min(bh,Math.ceil(pg.box.b*bh)+TRIM_PAD);
+      for(let y=top;y<bot;y+=PMAXH)segs.push({i:pg.i,scale,x:Math.round(L*bw)-TRIM_PAD,y,h:Math.min(PMAXH,bot-y)});   // a page too long for one print is sliced
+    }
+    const parts=pack(segs);
+    for(const p of parts){const a=p.segs[0].i, b=p.segs[p.segs.length-1].i; p.label=(a===b?`page ${a}`:`pages ${a}–${b}`)+` of ${N}`}
+    return {parts,rows:segs.reduce((t,g)=>t+g.h,0),note:N>n?`only the first ${n} pages`:'',close:()=>doc.destroy(),
+      // Pass 2, done when a part is shown: draw its pages at the final size (sharper than drawing then shrinking), crop, stack
+      render:async p=>{
+        const c=mkCanvas(PW,p.rows), g=c.getContext('2d',{willReadFrequently:true});
+        g.fillStyle='#fff'; g.fillRect(0,0,PW,p.rows);
+        let y=0, big=null, bigOf=0;
+        for(const sg of p.segs){ if(bigOf!==sg.i){big=await draw(sg.i,sg.scale);bigOf=sg.i} g.drawImage(big,sg.x,sg.y,PW,sg.h,0,y,PW,sg.h); y+=sg.h; }
+        return c;
+      }};
+  }catch(e){doc.destroy();throw e}
+}
+
+/* How much paper a number of rows uses, e.g. "51 cm (20 in)". */
+function paper(rows){
+  const mm=rows/DOTS_PER_MM, inch=mm/25.4;
+  return (mm<1000?Math.max(1,Math.round(mm/10))+' cm':(mm/1000).toFixed(1)+' m')+' ('+(inch<36?Math.max(1,Math.round(inch))+' in':(inch/12).toFixed(1)+' ft')+')';
+}
+function drawNav(){
+  const j=job; if(!j)return; const n=j.parts.length, p=j.parts[j.cur];
+  $('pNav').classList.toggle('on',n>1);
+  $('pPart').textContent=`Part ${j.cur+1} of ${n}`+(p.label?' · '+p.label:'');
+  $('pPrev').disabled=j.cur===0; $('pNext').disabled=j.cur===n-1;
+  $('pNote').textContent=(n>1?`This part ${paper(p.rows)} · whole file ${paper(j.rows)}`:`Paper ${paper(p.rows)}`)+(j.note?' · '+j.note:'');
+}
+/* Put one part of the file on the ticket. Parts are prepared the first time they are shown, then kept. */
+async function showPart(i){
+  const j=job, id=loadId, p=j.parts[i], here=()=>id===loadId&&j.cur===i;
+  j.cur=i; imgBits=null; $('pImg').classList.add('turning'); drawNav();
+  try{
+    if(!p.bits){
+      const c=await j.render(p); if(!here())return;
+      await new Promise(f=>setTimeout(f)); if(!here())return;     // let the screen update first
+      p.bits=rasterize(c);
+    }
+  }catch(e){ if(!here())return; console.error(e); }
+  if(!p.bits){ toast('Couldn’t prepare that part'); if($('pImg').classList.contains('busy'))$('rmImg').click(); else $('pImg').classList.remove('turning'); return; }
+  imgBits=p.bits; showBits(p.bits); $('pImg').classList.remove('busy','turning');
+}
+function closeJob(){ if(job&&job.close)job.close(); job=null; }
+
+async function loadFile(file){
+  if(!file)return;
+  const pdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+  if(!pdf&&!/^image\/(jpeg|png)$/.test(file.type)){toast('Use a JPG, PNG, or PDF');return}
+  const id=++loadId, alive=()=>id===loadId;
+  closeJob(); imgBits=null; $('pWait').textContent='Preparing…'; $('pImg').classList.remove('turning'); $('pImg').classList.add('on','busy');
+  let j=null;
+  try{ j=pdf?await pdfJob(file,alive,t=>{$('pWait').textContent=t}):pictureJob(await decodeImage(file)); }catch(e){ console.error(e); }
+  if(!alive()){ if(j&&j.close)j.close(); return; }
+  if(!j||!j.parts.length){
+    if(j&&j.close)j.close();
+    $('pImg').classList.remove('on','busy'); $('file').value='';
+    toast(j?'That PDF is blank':pdf?'Couldn’t read that PDF':'Couldn’t read that image'); return;
+  }
+  job=j; j.cur=0; await showPart(0);
+}
+$('pPrev').onclick=()=>{ if(job&&job.cur>0)showPart(job.cur-1) };
+$('pNext').onclick=()=>{ if(job&&job.cur<job.parts.length-1)showPart(job.cur+1) };
+$('file').onchange=e=>loadFile(e.target.files[0]);
+['dragenter','dragover'].forEach(t=>$('drop').addEventListener(t,e=>{e.preventDefault();$('drop').classList.add('over')}));
+['dragleave','drop'].forEach(t=>$('drop').addEventListener(t,e=>{e.preventDefault();$('drop').classList.remove('over')}));
+$('drop').addEventListener('drop',e=>{e.stopPropagation();loadFile(e.dataTransfer.files[0])});
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>{e.preventDefault();loadFile(e.dataTransfer.files[0])});
+$('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
+
+/* ---------- Connectors ---------- */
+const FILL={
+  todoist:{src:'TODOIST · TODAY',title:'Today',body:'☐ Finish BA 200 reading\n☐ Email the TA\n☐ Gym 6pm\n☐ Order printer paper'},
+  weather:{src:'WEATHER · ANN ARBOR',title:'34° · Light snow',body:'High 38°  Low 27°\nBring a jacket.'},
+};
+document.querySelector('#conn .menu').addEventListener('click',e=>{
+  const b=e.target.closest('.mi'); if(!b)return; const c=b.dataset.c; closeAll(null);
+  if(FILL[c]){const f=FILL[c];$('tTitle').value=f.title;$('tBody').value=f.body;grow($('tTitle'));grow($('tBody'));$('srcName').textContent=f.src;$('pSrc').classList.add('on')}
+  else toast(c==='add'?'Paste an API token to add a connector':'Paste your token in Settings to connect');
+});
+$('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');$('tTitle').value='';$('tBody').value='';grow($('tTitle'));grow($('tBody'))};
+
+/* ---------- Print ---------- */
+/* Body sent to the board: 4-byte length + JSON + (optional) raw image bits. See print_post in api.c. */
+function printBody(){
+  const meta={title:$('tTitle').value.trim(),body:$('tBody').value.replace(/\s+$/,''),source:$('pSrc').classList.contains('on')?$('srcName').textContent:''};
+  const hasImg=$('pImg').classList.contains('on')&&imgBits;
+  if(hasImg)meta.image={width:PW,height:imgBits.height};
+  const json=new TextEncoder().encode(JSON.stringify(meta));
+  const buf=new Uint8Array(4+json.length+(hasImg?imgBits.data.length:0));
+  new DataView(buf.buffer).setUint32(0,json.length,true);
+  buf.set(json,4); if(hasImg)buf.set(imgBits.data,4+json.length);
+  return buf;
+}
+async function doPrint(){
+  if(printing||offline)return;
+  if(!$('tTitle').value.trim()&&!$('tBody').value.trim()&&!$('pImg').classList.contains('on')){$('tBody').focus();return}
+  if($('pImg').classList.contains('on')&&!imgBits){toast('Still preparing the file…');return}
+  printing=true; $('printBtn').disabled=true; $('paper').classList.add('out');
+  const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),20000);
+  let r;
+  try{
+    // run the request and the "ticket leaves" animation together
+    const [res]=await Promise.all([
+      fetch('/api/print',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:printBody(),signal:ctl.signal}).then(x=>x.json()),
+      new Promise(f=>setTimeout(f,800))]);
+    r=res;
+  }catch(e){r={ok:false,message:'Couldn’t reach the printer'}}
+  clearTimeout(timer);
+  const p=$('paper');
+  if(r.ok){
+    // a long file prints one part per press: after each part, the next one comes up
+    const multi=job&&job.parts.length>1, more=multi&&job.cur<job.parts.length-1;
+    toast((multi?`Printed part ${job.cur+1} of ${job.parts.length}`:`Printed ${pad(r.number)}`)+(viaUsb?' over USB-C':''));
+    ticket=r.ticket_count+1; showDate();
+    $('tTitle').value='';$('tBody').value='';grow($('tTitle'));grow($('tBody'));
+    if(more)showPart(job.cur+1); else $('rmImg').click();
+    $('pSrc').classList.remove('on');
+    // a fresh ticket slides up into place
+    p.style.transition='none'; p.classList.remove('out'); p.style.transform='translateY(30px)'; p.style.opacity=0;
+    p.offsetHeight; p.style.transition=''; p.style.transform=''; p.style.opacity='';
+    $('tTitle').focus();
+  }else{
+    p.classList.remove('out');   // the same ticket comes back, nothing is lost
+    toast(r.message||'Printing failed');
+  }
+  printing=false; $('printBtn').disabled=false;
+}
+$('printBtn').onclick=doPrint;
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))doPrint()});
+
+let tt;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1800)}
+</script>
+</body>
+</html>
