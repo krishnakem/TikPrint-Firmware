@@ -13,9 +13,9 @@
  *   GET  /api/diag/printer-status       ask the printer how it is; raw answer bytes + what they mean
  *   GET  /api/last-ticket    the last ticket that started printing (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
- *   POST /api/update         install new firmware (the body is the .bin file, see update_post)
- *   POST /api/pin            turn the PIN for updates on or off, or change it (see pin_post)
- *   POST /api/pin/check      {"pin": "123456"}: is this the right PIN?
+ *   POST /api/update/check   ask GitHub whether there is newer firmware (the answer shows up in /api/status)
+ *   POST /api/update/install download the newer firmware from GitHub and restart into it
+ *   POST /api/update         install firmware from a file. Only over the USB cable (see update_post)
  */
 #include <string.h>
 #include <stdlib.h>
@@ -38,7 +38,7 @@
 #include "printer.h"
 #include "clock.h"
 #include "settings.h"
-#include "pin.h"
+#include "fw_github.h"
 #include "fw_update.h"
 
 static const char *TAG = "api";
@@ -286,19 +286,32 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     add_clock_status(root);
     add_settings(root);
-    // Firmware: "id" changes with every build (the version number may not), "slot" is where it runs from,
-    // "boot_id" is a new number after every restart, "pin_required" says whether updates ask for the PIN.
+    // Firmware: "id" changes with every build, "slot" is where it runs from, "boot_id" is a new number
+    // after every restart. The rest is about updates from GitHub (see fw_github.h): "latest" is the newest
+    // release ("" if not known), "available" says it is newer than this one, "state" is what the board is
+    // doing about it (idle, checking, downloading, restarting), "progress" is the download in percent.
     const esp_app_desc_t *app = esp_app_get_description();
     char built[40];
     snprintf(built, sizeof(built), "%s %s", app->date, app->time);
     cJSON_AddNumberToObject(root, "boot_id", fw_update_boot_id());
     cJSON *upd = cJSON_AddObjectToObject(root, "update");
-    cJSON_AddBoolToObject(upd, "pin_required", pin_is_set());
     cJSON_AddStringToObject(upd, "id", esp_app_get_elf_sha256_str());
     cJSON_AddStringToObject(upd, "built", built);
     cJSON_AddStringToObject(upd, "slot", fw_update_slot());
     cJSON_AddBoolToObject(upd, "on_trial", fw_update_on_trial());
     cJSON_AddNumberToObject(upd, "max_bytes", fw_update_max_size());
+    fw_github_status_t gh;
+    fw_github_get_status(&gh);
+    cJSON_AddStringToObject(upd, "state", fw_github_state_name(gh.state));
+    cJSON_AddStringToObject(upd, "latest", gh.latest);
+    cJSON_AddBoolToObject(upd, "available", gh.available);
+    cJSON_AddNumberToObject(upd, "progress", gh.progress);
+    cJSON_AddStringToObject(upd, "error", gh.error);
+    if (gh.checked) {
+        cJSON_AddNumberToObject(upd, "checked_s_ago", gh.checked_s_ago);
+    } else {
+        cJSON_AddNullToObject(upd, "checked_s_ago");
+    }
     cJSON_AddNumberToObject(root, "free_heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return send_json(req, root);
@@ -704,30 +717,7 @@ static esp_err_t last_ticket_pbm_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
-/* ---------- PIN for firmware updates ----------
- * The PIN is optional. While one is set, POST /api/update wants it (see pin.c). */
-
-/* Fill in the error part of a reply after pin_check() said no:
- *   {"ok":false,"error":"wrong_pin","tries_left":3,"message":"..."}
- *   {"ok":false,"error":"locked","retry_s":300,"message":"..."} */
-static void add_pin_refusal(httpd_req_t *req, cJSON *root, pin_result_t res, int tries_left, int retry_s)
-{
-    char msg[80];
-    cJSON_AddBoolToObject(root, "ok", false);
-    if (res == PIN_LOCKED) {
-        httpd_resp_set_status(req, "429 Too Many Requests");
-        cJSON_AddStringToObject(root, "error", "locked");
-        cJSON_AddNumberToObject(root, "retry_s", retry_s);
-        snprintf(msg, sizeof(msg), "Too many wrong PINs. Try again in %d min", (retry_s + 59) / 60);
-    } else {
-        httpd_resp_set_status(req, "401 Unauthorized");
-        cJSON_AddStringToObject(root, "error", "wrong_pin");
-        cJSON_AddNumberToObject(root, "tries_left", tries_left);
-        snprintf(msg, sizeof(msg), "Wrong PIN. %d %s left", tries_left, tries_left == 1 ? "try" : "tries");
-    }
-    cJSON_AddStringToObject(root, "message", msg);
-}
-
+/* Say no: {"ok":false,"error":"...","message":"..."} with an HTTP status to match. */
 static esp_err_t refuse(httpd_req_t *req, const char *http_status, const char *error, const char *message)
 {
     cJSON *root = cJSON_CreateObject();
@@ -738,108 +728,69 @@ static esp_err_t refuse(httpd_req_t *req, const char *http_status, const char *e
     return send_json(req, root);
 }
 
-/* ---------- POST /api/pin/check ----------
- * {"pin": "123456"} -> {"ok":true}, or the refusal above. A wrong PIN uses up a try.
- * The page asks this before it starts a long firmware upload. */
-static esp_err_t pin_check_post(httpd_req_t *req)
-{
-    cJSON *body = read_json_body(req);
-    if (!body) {
-        return ESP_OK;
-    }
-    const cJSON *jpin = cJSON_GetObjectItem(body, "pin");
-    int tries_left = 0, retry_s = 0;
-    pin_result_t res = pin_check(cJSON_IsString(jpin) ? jpin->valuestring : "", &tries_left, &retry_s);
-    cJSON_Delete(body);
-
-    cJSON *root = cJSON_CreateObject();
-    if (res == PIN_OK) {
-        cJSON_AddBoolToObject(root, "ok", true);
-    } else {
-        add_pin_refusal(req, root, res, tries_left, retry_s);
-    }
-    return send_json(req, root);
-}
-
-/* ---------- POST /api/pin ----------
- *   {"new": "123456"}                       turn the PIN on (while none is set)
- *   {"current": "123456", "new": "654321"}  change it
- *   {"current": "123456", "new": ""}        turn it off
- *   {"reset": true}                         forgot it: remove it. Only over the USB cable.
- * Reply: {"ok":true,"pin_required":true|false}, or {"ok":false,"error":...,"message":...}. */
-static esp_err_t pin_post(httpd_req_t *req)
+/* ---------- POST /api/update/check ----------
+ * Ask GitHub for the latest release. Replies {"ok":true} at once; the answer arrives a
+ * second or two later in /api/status ("update": state, latest, available, error). */
+static esp_err_t update_check_post(httpd_req_t *req)
 {
     if (!request_is_same_site(req)) {
         return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
     }
-    cJSON *body = read_json_body(req);
-    if (!body) {
-        return ESP_OK;
-    }
-    const cJSON *jcur = cJSON_GetObjectItem(body, "current");
-    const cJSON *jnew = cJSON_GetObjectItem(body, "new");
-    bool reset = cJSON_IsTrue(cJSON_GetObjectItem(body, "reset"));
-    char cur[PIN_LEN + 1] = "", new_pin[PIN_LEN + 1] = "";
-    bool has_new = cJSON_IsString(jnew);
-    bool new_ok = has_new && (jnew->valuestring[0] == 0 || pin_format_ok(jnew->valuestring));
-    bool has_cur = cJSON_IsString(jcur);
-    if (has_cur && strlen(jcur->valuestring) <= PIN_LEN) {
-        strlcpy(cur, jcur->valuestring, sizeof(cur));
-    }
-    if (new_ok) {
-        strlcpy(new_pin, jnew->valuestring, sizeof(new_pin));
-    }
-    cJSON_Delete(body);
-
-    esp_err_t err;
-    if (reset) {
-        if (!request_is_from_usb_cable(req)) {
-            return refuse(req, "403 Forbidden", "usb_only",
-                          "A forgotten PIN can only be removed over the USB cable, at http://" USB_NET_IP_STR);
-        }
-        err = pin_clear();
-    } else {
-        if (!new_ok) {
-            return refuse(req, "400 Bad Request", "bad_pin_format", "A PIN is exactly 6 digits");
-        }
-        if (pin_is_set()) {
-            if (!has_cur) {   // nothing to compare: say so without using up a try
-                return refuse(req, "401 Unauthorized", "pin_required", "This printer already has a PIN. Enter it first");
-            }
-            int tries_left = 0, retry_s = 0;
-            pin_result_t res = pin_check(cur, &tries_left, &retry_s);
-            if (res != PIN_OK) {
-                cJSON *root = cJSON_CreateObject();
-                add_pin_refusal(req, root, res, tries_left, retry_s);
-                return send_json(req, root);
-            }
-        }
-        err = new_pin[0] ? pin_set(new_pin) : pin_clear();
-    }
-    if (err != ESP_OK) {
-        return refuse(req, "500 Internal Server Error", "not_saved", "The PIN could not be saved");
+    if (fw_github_check_now() != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is already checking or updating");
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddBoolToObject(root, "pin_required", pin_is_set());
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/update/install ----------
+ * Download the latest release from GitHub and restart into it. Only does anything if a
+ * check found a release newer than the running firmware. Replies {"ok":true} at once;
+ * follow the download in /api/status ("update": state, progress, error). */
+static esp_err_t update_install_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    int waiting;
+    bool printing, paused;
+    printer_queue_info(&waiting, &printing, &paused);
+    if (printing || waiting > 0) {
+        return refuse(req, "409 Conflict", "busy", "Tickets are still printing or waiting. Update when the queue is empty");
+    }
+    if (fw_update_on_trial()) {
+        return refuse(req, "409 Conflict", "on_trial", "The printer was updated a moment ago. Try again in a few seconds");
+    }
+    esp_err_t err = fw_github_install();
+    if (err == ESP_ERR_NOT_FOUND) {
+        return refuse(req, "409 Conflict", "up_to_date", "There is no newer firmware to install. Check for updates first");
+    }
+    if (err != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is already checking or updating");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
     return send_json(req, root);
 }
 
 /* ---------- POST /api/update ----------
- * Install new firmware. The body is the firmware file itself (build/tikprint_firmware.bin):
+ * Install firmware from a file, for trying a build that is not a release yet.
+ * The body is the firmware file itself (build/tikprint_firmware.bin):
  *
- *   curl --data-binary @build/tikprint_firmware.bin http://tikprint.local/api/update
- *   curl -H "X-PIN: 123456" --data-binary @build/tikprint_firmware.bin http://tikprint.local/api/update
+ *   curl --data-binary @build/tikprint_firmware.bin http://192.168.7.1/api/update
+ *
+ * This only works over the USB cable. Over Wi-Fi the only firmware the board accepts is
+ * a release from GitHub (see fw_github.c), so nobody on the network can hand it anything else.
  *
  * The file is written to the firmware slot that is not running, checked, and then the board
  * restarts into it (see fw_update.c). The reply comes just before the restart:
  *   {"ok":true,"bytes":1832848,"slot":"ota_0","message":"Update installed. Restarting"}
  * On any failure the running firmware is untouched:
  *   {"ok":false,"error":"...","message":"..."}
- *   error: other_site, pin_required, wrong_pin, locked, bad_size, busy, not_firmware,
- *          on_trial, upload_broken, bad_file, failed
+ *   error: other_site, usb_only, bad_size, busy, not_firmware, on_trial, bad_file, failed
  * The web server handles one request at a time, so the board answers nothing else during
- * the upload (10 to 30 seconds over Wi-Fi). */
+ * the upload. */
 static uint8_t s_update_buf[UPDATE_CHUNK];
 
 /* Read up to want bytes of the upload. Returns how many arrived, or -1 if the upload broke off. */
@@ -893,21 +844,11 @@ static esp_err_t update_post(httpd_req_t *req)
         return update_fail(req, left, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
     }
 
-    // 1. The PIN, if one is set. It comes in the "X-PIN" header.
-    if (pin_is_set()) {
-        char pin[PIN_LEN + 1] = "";
-        esp_err_t herr = httpd_req_get_hdr_value_str(req, "X-PIN", pin, sizeof(pin));
-        if (herr == ESP_ERR_NOT_FOUND) {
-            return update_fail(req, left, "401 Unauthorized", "pin_required",
-                               "This printer asks for a PIN before an update (send it in the X-PIN header)");
-        }
-        int tries_left = 0, retry_s = 0;
-        pin_result_t res = pin_check(herr == ESP_OK ? pin : "", &tries_left, &retry_s);
-        if (res != PIN_OK) {
-            cJSON *root = cJSON_CreateObject();
-            add_pin_refusal(req, root, res, tries_left, retry_s);
-            return update_refuse(req, left, root);
-        }
+    // 1. Only over the USB cable (see the note above).
+    if (!request_is_from_usb_cable(req)) {
+        return update_fail(req, left, "403 Forbidden", "usb_only",
+                           "A firmware file can only be installed over the USB cable, at http://" USB_NET_IP_STR
+                           ". Over Wi-Fi, use Check for updates");
     }
 
     // 2. Is it a sensible moment, and a sensible size?
@@ -920,6 +861,11 @@ static esp_err_t update_post(httpd_req_t *req)
     if (printing || waiting > 0) {
         return update_fail(req, left, "409 Conflict", "busy",
                            "Tickets are still printing or waiting. Update when the queue is empty");
+    }
+    fw_github_status_t gh;
+    fw_github_get_status(&gh);
+    if (gh.state != FW_GITHUB_IDLE) {
+        return update_fail(req, left, "409 Conflict", "busy", "The printer is already checking or updating");
     }
 
     // 3. The first piece of the file says what it is: refuse anything that is not TikPrint firmware.
@@ -1005,8 +951,8 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/print",        .method = HTTP_POST, .handler = print_post },
         { .uri = "/api/last-ticket",  .method = HTTP_GET,  .handler = last_ticket_get },
         { .uri = "/api/last-ticket.pbm", .method = HTTP_GET, .handler = last_ticket_pbm_get },
-        { .uri = "/api/pin",          .method = HTTP_POST, .handler = pin_post },
-        { .uri = "/api/pin/check",    .method = HTTP_POST, .handler = pin_check_post },
+        { .uri = "/api/update/check", .method = HTTP_POST, .handler = update_check_post },
+        { .uri = "/api/update/install", .method = HTTP_POST, .handler = update_install_post },
         { .uri = "/api/update",       .method = HTTP_POST, .handler = update_post },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

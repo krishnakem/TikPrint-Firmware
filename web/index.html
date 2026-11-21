@@ -162,7 +162,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .grp .kv{padding:10px 12px}
 .grp .kv:not([hidden])~.kv{border-top:1px solid var(--line)}
 .grp button.kv{border-radius:0}
-.kv .go{font:15px var(--sans);color:var(--muted)}
+.kv span.go{font:15px var(--sans);color:var(--muted)}
 label.kv{cursor:pointer}
 /* On/off switch */
 .sw{appearance:none;-webkit-appearance:none;width:30px;height:18px;border-radius:9px;background:var(--line);position:relative;cursor:pointer;transition:.15s;margin:0;flex:none}
@@ -170,10 +170,10 @@ label.kv{cursor:pointer}
 .sw:checked{background:var(--ok)} .sw:checked::after{left:14px}
 .note{display:flex;align-items:center;gap:8px;padding:9px 10px;font-size:14px;color:var(--muted)}
 .kv[hidden]{display:none}
-/* A settings row you can press (Change PIN, Update firmware) */
+/* A settings row you can press (Check for updates, Install from file) */
 button.kv{width:100%;border-radius:8px;text-align:left}
 button.kv:hover{background:var(--hover)}
-/* Sheet: PIN entry and firmware update take over the Settings popover */
+/* Sheet: a firmware update takes over the Settings popover */
 .sheet{display:none;padding:18px 10px 10px;text-align:center}
 .sheet .c{width:36px;height:36px;border-radius:50%;background:var(--hover);color:var(--ink);display:grid;place-items:center;margin:0 auto 10px}
 .sheet .c.ok{background:var(--ok);color:#fff}
@@ -182,20 +182,15 @@ button.kv:hover{background:var(--hover)}
 .sheet p{margin:4px 6px 0;min-height:36px;font-size:13px;line-height:1.4;color:var(--muted)}
 .sheet .link{display:block;margin:10px auto 0;color:var(--muted);font-size:13px}
 .sheet .link:hover{color:var(--ink)}
-/* PIN boxes. The real text field lies invisibly on top of them, so typing, pasting and phone keypads all work. */
-.pin{position:relative;display:flex;justify-content:center;gap:7px;margin:14px 0 6px}
-.pin i{width:34px;height:42px;border:1px solid var(--line);border-radius:9px;background:var(--bg);display:grid;place-items:center;transition:border-color .12s,box-shadow .12s}
-.pin i.f::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--ink);animation:dot .14s ease}
-@keyframes dot{from{transform:scale(.3);opacity:0}}
-.pin:focus-within i.cur{border-color:var(--ink);box-shadow:0 0 0 3px var(--hover)}
-.pin input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:text;font-size:16px}
-.pin.bad{animation:shake .34s}
-.pin.bad i{border-color:var(--bad)}
-@keyframes shake{20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
+.sheet .btn{display:block;width:calc(100% - 20px);height:36px;margin:16px auto 0;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600}
 /* Upload progress */
 .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px 10px 10px}
 .bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
-@media (prefers-reduced-motion:reduce){.pin.bad,.pin i.f::after{animation:none}}
+/* The right-hand side of the "Check for updates" row: a short note in words, not in the code font */
+.kv span.say{display:inline-flex;align-items:center;gap:7px;font:13px var(--sans);color:var(--muted)}
+/* A green dot on the gear while newer firmware is waiting */
+#gearBtn{position:relative}
+#gearBtn.new::after{content:"";position:absolute;top:4px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--bg)}
 .ok-state .link+.link{margin-top:6px}
 
 .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
@@ -263,20 +258,18 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     <h3>Firmware</h3>
     <div class="grp">
       <div class="kv"><span>Version</span><span id="setFw"></span></div>
-      <button class="kv" id="fwBtn"><span>Update firmware</span><span class="go">›</span></button>
-      <label class="kv"><span>Require PIN for updates</span><input type="checkbox" class="sw" id="swPin"></label>
-      <button class="kv" id="pinChange" hidden><span>Change PIN</span><span class="go">›</span></button>
+      <button class="kv" id="fwCheck"><span id="fwCheckLabel">Check for updates</span><span class="say" id="fwCheckNote"></span></button>
+      <button class="kv" id="fwBtn" hidden><span>Install from file</span><span class="go">›</span></button>
     </div>
     <input type="file" id="fwFile" accept=".bin,application/octet-stream" hidden>
   </div>
-  <!-- PIN entry and update progress are shown here, in place of the list above -->
+  <!-- An update's question and progress are shown here, in place of the list above -->
   <div class="sheet" id="sheet" aria-live="polite">
     <div class="c" id="shIco"></div>
     <b id="shTitle"></b>
     <p id="shText"></p>
-    <div class="pin" id="shPin"><input type="text" id="pinIn" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="PIN"></div>
     <div class="bar" id="shBar"><i></i></div>
-    <button class="link" id="shForgot"></button>
+    <button class="btn" id="shGo"></button>
     <button class="link" id="shCancel"></button>
   </div>
 </div>
@@ -632,143 +625,69 @@ $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gear
 $('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);$('conn').classList.toggle('open',o)};
 document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(null)});
 
-/* ---------- Firmware update and its PIN ---------- */
+/* ---------- Firmware update ---------- */
 /* Settings > Firmware:
-   - "Update firmware" sends a firmware file (build/tikprint_firmware.bin) to the board. The board writes
-     it to a spare firmware slot, checks it and restarts into it. This page shows the upload, waits for
-     the board to come back, then reloads itself so you get the new page too.
-   - "Require PIN for updates" is optional. Switch it on and choose a PIN: from then on the board refuses
-     an update without it. The PIN is kept on the board, never in this page.
-   PIN entry and update progress are shown as a "sheet" that takes over the Settings popover. */
-const PIN_LEN=6;                // digits in a PIN. Must match PIN_LEN in main/pin.h
-const UPDATE_UPLOAD_MS=180000;  // give up on an upload after this long
+   - "Check for updates": the board asks GitHub for the latest release of the firmware. If it is newer than
+     what is running, the row turns into "Update to v0.3.0" and the gear gets a green dot. Installing it is one
+     click: the board downloads the file from GitHub itself, checks it and restarts into it. This page shows
+     the download, waits for the board to come back, then reloads itself so you get the new page too.
+     The board also checks by itself once a day, so the dot can appear without anyone asking.
+   - "Install from file" (only shown over the USB cable) sends a firmware file from this computer instead,
+     for trying a build that is not a release yet. Over Wi-Fi the board accepts nothing but a GitHub release.
+   The question and the progress are shown as a "sheet" that takes over the Settings popover. */
+const UPDATE_UPLOAD_MS=180000;  // give up on a file upload after this long
 const UPDATE_BACK_MS=60000;     // how long to wait for the board to come back after an update
+const UPDATE_POLL_MS=700;       // how often to ask the board how a check or a download is going
 const SVG=d=>`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const SHEET_ICONS={
-  lock:SVG('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
   up:SVG('<path d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/>'),
   ok:SVG('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
   bad:SVG('<path d="M12 7v6M12 17h.01"/>'),
   wait:'<span class="spin"></span>',
 };
 const sleep=ms=>new Promise(f=>setTimeout(f,ms));
-let pinOn=false, fw={id:'',slot:'',max:4194304,boot:0}, sheetDone=null;
-$('pinIn').maxLength=PIN_LEN;
-for(let i=0;i<PIN_LEN;i++)$('shPin').insertBefore(document.createElement('i'),$('pinIn'));
+let fw={id:'',slot:'',ver:'',max:4194304,boot:0,up:null}, checking=false, checkFailed=false;
 
-/* From /api/status: which firmware is running, and whether updates ask for the PIN.
-   "id" is different for every build, even when the version number is the same. */
+/* From /api/status: which firmware is running ("id" is different for every build),
+   and what the board knows about a newer one on GitHub. */
 function showFirmware(s){
   const u=s.update;
-  fw={id:u.id,slot:u.slot,max:u.max_bytes||fw.max,boot:s.boot_id};
-  pinOn=u.pin_required;
+  fw={id:u.id,slot:u.slot,ver:s.version,max:u.max_bytes||fw.max,boot:s.boot_id,up:u};
   $('setFw').textContent=`v${s.version} · ${u.id.slice(0,7)}`;
-  $('setFw').title=`Built ${u.built}, running from "${u.slot}"`;
-  $('swPin').checked=pinOn; $('pinChange').hidden=!pinOn;
+  $('setFw').title=`Running from "${u.slot}"`;
+  $('fwBtn').hidden=!viaUsb;
+  $('gearBtn').classList.toggle('new',!!u.available);
+  const busy=u.state==='downloading'||u.state==='restarting';
+  $('fwCheckLabel').textContent=busy?`Installing v${u.latest}`:u.available?`Update to v${u.latest}`:'Check for updates';
+  $('fwCheckNote').innerHTML=
+    checking||u.state==='checking'?'<span class="spin"></span>':
+    busy?`${u.progress}%`:
+    u.available?'<span class="led"></span>New':
+    checkFailed?'Couldn’t check':
+    u.checked_s_ago!=null?'Up to date':'<span class="go">›</span>';
 }
 
-/* The sheet. o = {icon, tone:'ok'|'bad', title, text, pin:true, bar:true, forgot:true, cancel:'Cancel'} */
+/* The sheet. o = {icon, tone:'ok'|'bad', title, text, bar:true, go:'Install', cancel:'Not now'} */
 function showSheet(o){
   $('gearMain').style.display='none'; $('sheet').style.display='block';
   $('shIco').className='c'+(o.tone?' '+o.tone:''); $('shIco').innerHTML=SHEET_ICONS[o.icon];
   $('shTitle').textContent=o.title; $('shText').textContent=o.text||'';
-  $('shPin').style.display=o.pin?'':'none'; $('shBar').style.display=o.bar?'':'none';
-  $('shForgot').style.display=o.forgot?'':'none'; $('shForgot').textContent=viaUsb?'Forgot it? Remove the PIN':'Forgot the PIN?';
+  $('shBar').style.display=o.bar?'':'none'; $('shBar').firstElementChild.style.width='0';
+  $('shGo').style.display=o.go?'':'none'; $('shGo').textContent=o.go||''; $('shGo').onclick=null;
   $('shCancel').style.display=o.cancel?'':'none'; $('shCancel').textContent=o.cancel||''; $('shCancel').onclick=closeSheet;
 }
-function closeSheet(){
-  if(sheetDone)sheetDone(null);   // a PIN was being asked for: that counts as Cancel
-  $('sheet').style.display='none'; $('gearMain').style.display='';
-}
-
-/* Ask for a PIN on the sheet. Gives back the PIN, or null if the person cancelled.
-   verify(pin) may check it first: it returns nothing if the PIN is fine, or the message to show
-   (the boxes then shake, empty themselves and wait for another try). */
-function askPin(o,verify){
-  return new Promise(resolve=>{
-    const inp=$('pinIn'), box=$('shPin'), cells=[...box.querySelectorAll('i')];
-    let busy=false, live=true;
-    const draw=()=>cells.forEach((c,i)=>{c.classList.toggle('f',i<inp.value.length);c.classList.toggle('cur',i===Math.min(inp.value.length,PIN_LEN-1))});
-    const done=v=>{if(!live)return; live=false; sheetDone=null; inp.oninput=null; inp.blur(); resolve(v)};
-    sheetDone=done;
-    showSheet({icon:'lock',pin:true,cancel:'Cancel',...o});
-    inp.value=''; box.classList.remove('bad'); draw(); inp.focus();
-    inp.oninput=async()=>{
-      inp.value=inp.value.replace(/\D/g,'').slice(0,PIN_LEN); box.classList.remove('bad'); draw();
-      if(inp.value.length<PIN_LEN||busy)return;
-      busy=true; const pin=inp.value, problem=verify?await verify(pin):null; busy=false;
-      if(!live)return;
-      if(!problem)return done(pin);
-      $('shText').textContent=problem; inp.value=''; draw();
-      void box.offsetWidth; box.classList.add('bad'); inp.focus();   // offsetWidth: lets the shake play again
-    };
-    $('shCancel').onclick=()=>done(null);
-    $('shForgot').onclick=async()=>{await forgotPin(done); if(live)inp.focus()};   // back to the boxes, so typing still lands in them
-  });
-}
-/* A forgotten PIN can be removed without knowing it, but only by someone holding the board: over the USB cable. */
-async function forgotPin(done){
-  if(!viaUsb){$('shText').textContent=`Plug the printer into a computer with the USB-C cable and open http://${$('setUsb').textContent} there. Over the cable the PIN can be removed without knowing it.`;return}
-  let r=null; try{r=await api('/api/pin',{reset:true})}catch(e){}
-  if(r&&r.ok){done(null); closeSheet(); toast('PIN removed'); refreshStatus()}
-  else $('shText').textContent=(r&&r.message)||'Can’t reach the printer';
-}
-/* Both give back nothing when the board agreed, or the board's message when it did not ("Wrong PIN. 3 tries left"). */
-const pinAnswer=async(path,body)=>{try{const r=await api(path,body);return r.ok?null:(r.message||'That didn’t work')}catch(e){return 'Can’t reach the printer'}};
-const checkPin=pin=>pinAnswer('/api/pin/check',{pin});
-const sendPin=body=>pinAnswer('/api/pin',body);
-async function chooseNewPin(){
-  const first=await askPin({title:'Choose a PIN',text:`${PIN_LEN} digits. The printer will ask for it before every firmware update.`});
-  if(!first)return null;
-  return askPin({title:'Enter it again',text:'Just to be sure.'},async p=>p===first?null:'Those didn’t match. Enter the first PIN again.');
-}
-$('swPin').onclick=async e=>{
-  e.preventDefault();   // the switch only moves once the board has agreed
-  if(pinOn){
-    if(await askPin({title:'Enter your PIN',text:'To stop asking for a PIN before updates.',forgot:true},p=>sendPin({current:p,new:''})))toast('PIN is off');
-  }else{
-    const pin=await chooseNewPin();
-    if(pin)toast(await sendPin({new:pin})||'PIN is on');
-  }
-  closeSheet(); refreshStatus();
-};
-$('pinChange').onclick=async()=>{
-  const current=await askPin({title:'Enter the current PIN',text:'Then you can choose a new one.',forgot:true},checkPin);
-  const pin=current&&await chooseNewPin();
-  if(pin)toast(await sendPin({current,new:pin})||'PIN changed');
-  closeSheet(); refreshStatus();
-};
-
-/* Sending the file. XMLHttpRequest rather than fetch, because it reports how much has been sent. */
-function uploadFirmware(file,pin,onProgress){
-  return new Promise(done=>{
-    const x=new XMLHttpRequest(), lost=()=>done({ok:false,message:'Lost contact with the printer during the upload. Nothing was changed.'});
-    x.open('POST','/api/update'); x.timeout=UPDATE_UPLOAD_MS;
-    x.setRequestHeader('Content-Type','application/octet-stream');
-    if(pin)x.setRequestHeader('X-PIN',pin);
-    x.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded/e.total)};
-    x.onload=()=>{try{done(JSON.parse(x.responseText))}catch(e){lost()}};
-    x.onerror=x.ontimeout=x.onabort=lost;
-    x.send(file);
-  });
-}
+function closeSheet(){$('sheet').style.display='none'; $('gearMain').style.display=''}
 function sheetProblem(title,text){showSheet({icon:'bad',tone:'bad',title,text,cancel:'Close'})}
-async function installFirmware(file,pin){
-  updating=true;   // the board answers nothing else while it takes the file, so the heartbeat pauses
-  const was={...fw}, size=(file.size/1048576).toFixed(1)+' MB';
-  showSheet({icon:'up',title:'Updating firmware',text:`${file.name} · ${size}`,bar:true});
-  const fill=$('shBar').firstElementChild; fill.style.width='0';
-  const r=await uploadFirmware(file,pin,p=>{
-    fill.style.width=(p*100).toFixed(1)+'%';
-    $('shText').textContent=p<1?`${file.name} · ${Math.round(p*100)}% of ${size}`:'Checking the new firmware…';
-  });
-  if(!r.ok){updating=false; sheetProblem('Update failed',r.message||'The printer refused the file.'); refreshStatus(); return}
+function sheetProgress(percent,text){$('shBar').firstElementChild.style.width=percent+'%'; $('shText').textContent=text}
 
-  // The board restarts about a second after it answers. "boot_id" is new after every restart.
+/* The new firmware is in place and the board is restarting (or about to). Wait for it to come back,
+   say how it went, and reload. was = the firmware that was running before. */
+async function finishUpdate(was){
   showSheet({icon:'wait',title:'Restarting',text:'The printer is starting the new firmware. This takes a few seconds.'});
   const start=Date.now(); let s=null;
   while(!s&&Date.now()-start<UPDATE_BACK_MS){
     await sleep(800);
+    // "boot_id" is a new number after every restart
     try{const now=await api('/api/status',undefined,1500); if(now.update&&now.boot_id!==was.boot)s=now}catch(e){}
   }
   updating=false;
@@ -776,8 +695,71 @@ async function installFirmware(file,pin){
   applyStatus(s);
   // New firmware always runs from a different slot. Same slot as before = the board gave up on it and went back.
   if(s.update.slot===was.slot)return sheetProblem('Update undone','The new firmware didn’t start properly, so the printer went back to the one it had.');
-  showSheet({icon:'ok',tone:'ok',title:'Updated',text:`Now running v${s.version} · ${s.update.id.slice(0,7)}`});
+  showSheet({icon:'ok',tone:'ok',title:'Updated',text:`Now running v${s.version}`});
   await sleep(1800); location.reload();   // the page itself is part of the firmware
+}
+
+/* --- From GitHub --- */
+$('fwCheck').onclick=async()=>{
+  const u=fw.up; if(!u||checking||u.state!=='idle')return;
+  if(u.available)return askInstall();
+  checking=true; checkFailed=false; $('fwCheckNote').innerHTML='<span class="spin"></span>';
+  let r=null, s=null;
+  try{r=await api('/api/update/check',{})}catch(e){}
+  if(r&&r.ok){do{await sleep(UPDATE_POLL_MS); s=await refreshStatus()}while(s&&s.update.state==='checking')}
+  checking=false;
+  const now=s&&s.update, problem=!r?'Can’t reach the printer':!r.ok?r.message:!s?'Can’t reach the printer':now.error;
+  checkFailed=!!problem;
+  if(s)showFirmware(s); else $('fwCheckNote').textContent='Couldn’t check';
+  if(problem)toast(problem);
+  else if(now.available)askInstall();
+  else toast(`v${s.version} is the latest`);
+};
+function askInstall(){
+  const v=fw.up.latest;
+  showSheet({icon:'up',title:`Update to v${v}?`,text:`This printer runs v${fw.ver}. It downloads the new firmware from GitHub and restarts, which takes about a minute.`,go:'Install',cancel:'Not now'});
+  $('shGo').onclick=()=>installFromGithub(v);
+}
+async function installFromGithub(v){
+  const was={...fw};
+  let r=null; try{r=await api('/api/update/install',{})}catch(e){}
+  if(!r||!r.ok)return sheetProblem('Couldn’t start the update',r?r.message:'Can’t reach the printer.');
+  updating=true;   // from here the sheet stays up, and silence from the board means "restarting", not "disconnected"
+  showSheet({icon:'up',title:`Installing v${v}`,text:'Downloading from GitHub…',bar:true});
+  for(let silent=0;silent<5;){
+    await sleep(UPDATE_POLL_MS);
+    let s=null; try{s=await api('/api/status',undefined,2000)}catch(e){}
+    if(!s){silent++;continue}
+    silent=0;
+    const u=s.update;
+    if(s.boot_id!==was.boot||u.state==='restarting')break;
+    if(u.state==='downloading')sheetProgress(u.progress,`Downloading from GitHub… ${u.progress}%`);
+    else{updating=false; applyStatus(s); return sheetProblem('Update failed',u.error||'The download didn’t finish. Nothing was changed.')}
+  }
+  sheetProgress(100,'Checking the new firmware…');
+  finishUpdate(was);
+}
+
+/* --- From a file, over the USB cable --- */
+/* XMLHttpRequest rather than fetch, because it reports how much has been sent. */
+function uploadFirmware(file,onProgress){
+  return new Promise(done=>{
+    const x=new XMLHttpRequest(), lost=()=>done({ok:false,message:'Lost contact with the printer during the upload. Nothing was changed.'});
+    x.open('POST','/api/update'); x.timeout=UPDATE_UPLOAD_MS;
+    x.setRequestHeader('Content-Type','application/octet-stream');
+    x.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded/e.total)};
+    x.onload=()=>{try{done(JSON.parse(x.responseText))}catch(e){lost()}};
+    x.onerror=x.ontimeout=x.onabort=lost;
+    x.send(file);
+  });
+}
+async function installFromFile(file){
+  updating=true;   // the board answers nothing else while it takes the file, so the heartbeat pauses
+  const was={...fw}, size=(file.size/1048576).toFixed(1)+' MB';
+  showSheet({icon:'up',title:'Installing from file',text:`${file.name} · ${size}`,bar:true});
+  const r=await uploadFirmware(file,p=>sheetProgress((p*100).toFixed(1),p<1?`${file.name} · ${Math.round(p*100)}% of ${size}`:'Checking the new firmware…'));
+  if(!r.ok){updating=false; sheetProblem('Update failed',r.message||'The printer refused the file.'); refreshStatus(); return}
+  finishUpdate(was);
 }
 $('fwBtn').onclick=()=>$('fwFile').click();
 $('fwFile').onchange=async e=>{
@@ -786,12 +768,7 @@ $('fwFile').onchange=async e=>{
   // Every ESP32 program file starts with the byte E9. The board checks the rest.
   const first=new Uint8Array(await file.slice(0,1).arrayBuffer())[0];
   if(first!==0xE9||file.size>fw.max){toast('That isn’t a TikPrint firmware file');return}
-  let pin='';
-  if(pinOn){
-    pin=await askPin({title:'Enter your PIN',text:`To install ${file.name}.`,forgot:true},checkPin);
-    if(!pin){closeSheet();return}
-  }
-  installFirmware(file,pin);
+  installFromFile(file);
 };
 
 /* ---------- Wi-Fi ---------- */
