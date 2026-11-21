@@ -35,6 +35,7 @@
 
 #include "printer.h"
 #include "clock.h"
+#include "settings.h"
 
 static const char *TAG = "thermal_printer";
 
@@ -45,8 +46,8 @@ static const char *TAG = "thermal_printer";
 #define PRINTER_BAUD       115200  // must match the printer (its self-test page shows it)
 #define PRINTER_HAS_CUTTER 1       // 1 = cut the paper after each ticket
 #define FEED_LINES_AFTER   4       // blank lines after the ticket, so it clears the tear bar
-#define TICKET_SHOW_TIME   1       // 1 = add the print time to the "#0042" line (built-in font tickets, clock set)
-#define TICKET_TIME_FORMAT "%b %d %H:%M"   // e.g. "Nov 20 22:05" (a strftime pattern)
+#define HEADER_DATE_FORMAT "%b %d, %Y"     // header line of built-in font tickets, e.g. "Nov 20, 2026" (strftime patterns)
+#define HEADER_TIME_FORMAT "%I:%M %p %Z"   //                                        e.g. "10:05 PM EST"
 
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
 #define BAND_ROWS 64
@@ -162,29 +163,62 @@ static void finish_ticket(void)
 #endif
 }
 
+/*
+ * The header line of a ticket printed in the built-in font:
+ *   TikPrint | Los Angeles  Nov 20, 2026 | 10:05 PM PST
+ * Which parts appear is chosen in Settings (settings.c). Date and time come from the
+ * board's clock and are left out while it isn't set. (Tickets from the web page carry
+ * the same header inside their image, drawn by the page.)
+ */
+static void send_header(void)
+{
+    settings_t s;
+    clock_status_t c;
+    char date[24], time[24];
+    settings_get(&s);
+    clock_get_status(&c);
+    // No location typed in: use the city of the timezone ("America/Los_Angeles" -> "Los Angeles")
+    char city[CLOCK_TZ_MAX] = "";
+    const char *slash = strrchr(c.timezone, '/');
+    if (slash) {
+        strlcpy(city, slash + 1, sizeof(city));
+        for (char *p = city; *p; p++) {
+            *p = *p == '_' ? ' ' : *p;
+        }
+    }
+    const char *location = s.location[0] ? s.location : city;
+    bool has_date = s.show_date && clock_format_now(date, sizeof(date), HEADER_DATE_FORMAT);
+    bool has_time = s.show_time && clock_format_now(time, sizeof(time), HEADER_TIME_FORMAT);
+
+    send_text("TikPrint");
+    if (s.show_location && location[0]) {
+        send_text(" | ");
+        send_text(location);
+    }
+    if (has_date || has_time) {
+        send_text("  ");
+        send_text(has_date ? date : time);
+        if (has_date && has_time) {
+            send_text(" | ");
+            send_text(time);
+        }
+    }
+    send_text("\n");
+}
+
 static void send_job(const printer_job_t *job)
 {
-    char line[32];
     CMD("\x1B@");        // ESC @: reset the printer to its defaults
     CMD("\x1Bt\x00");    // ESC t 0: code page 437 (matches send_text above)
 
     // Normally the page has drawn the text into the image, in the font picked there.
     // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl).
     if (!job->text_in_image) {
-        snprintf(line, sizeof(line), "#%04u", (unsigned)job->number);
-        send_text(line);
-        if (job->source[0]) {
-            send_text("  ");
+        send_header();
+        if (job->source[0]) {   // the ticket number is not printed
             send_text(job->source);
+            send_text("\n");
         }
-#if TICKET_SHOW_TIME
-        char when[24];
-        if (clock_format_now(when, sizeof(when), TICKET_TIME_FORMAT)) {   // left out if the clock isn't set
-            send_text("  ");
-            send_text(when);
-        }
-#endif
-        send_text("\n");
 
         if (job->title[0]) {
             CMD("\x1B" "E\x01" "\x1D!\x11");   // bold on, double width + height
