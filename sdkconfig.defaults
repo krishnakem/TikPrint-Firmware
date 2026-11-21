@@ -27,3 +27,9 @@ CONFIG_TINYUSB_DESC_PRODUCT_STRING="TikPrint"
 # --- mDNS (the tikprint.local name) ---
 CONFIG_MDNS_ENABLE_CONSOLE_CLI=n
 CONFIG_MDNS_PREDEF_NETIF_AP=n
+
+# --- Network connections ("sockets") the board can have open at once ---
+# The web server may hold 7 for browsers and needs 3 itself, and the USB network uses 1. With the
+# default of 10 that left none for the board's own calls out (weather, firmware updates) while a
+# page was open in a busy browser.
+CONFIG_LWIP_MAX_SOCKETS=16
