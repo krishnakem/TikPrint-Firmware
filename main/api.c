@@ -2,7 +2,8 @@
  * JSON API used by the web UI.
  *
  *   GET  /api/ping           empty reply; the UI calls it ~3x a second to notice unplugging fast
- *   GET  /api/status         board, USB, Wi-Fi and print queue state
+ *   GET  /api/status         board, USB, Wi-Fi, print queue and clock state
+ *   POST /api/time           {"unix_ms": N, "timezone": "America/Detroit", "posix_tz": "EST5EDT,..."}
  *   GET  /api/wifi/scan      nearby networks
  *   POST /api/wifi/connect   {"ssid": "...", "password": "..."}
  *   POST /api/wifi/forget
@@ -29,6 +30,7 @@
 #include "wifi_mgr.h"
 #include "counter.h"
 #include "printer.h"
+#include "clock.h"
 
 static const char *TAG = "api";
 
@@ -148,6 +150,26 @@ static esp_err_t diag_ping_get(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/* The "time" part of /api/status:
+ *   {"set":true,"source":"browser","now":"2026-11-20T22:05:31-05:00","timezone":"America/Detroit","last_sync_s_ago":12}
+ * Until something sets the clock: "set" is false, "source" is "none", "now" and "last_sync_s_ago" are null. */
+static void add_clock_status(cJSON *root)
+{
+    clock_status_t c;
+    clock_get_status(&c);
+    cJSON *time = cJSON_AddObjectToObject(root, "time");
+    cJSON_AddBoolToObject(time, "set", c.set);
+    cJSON_AddStringToObject(time, "source", clock_source_name(c.source));
+    cJSON_AddStringToObject(time, "timezone", c.timezone);
+    if (c.set) {
+        cJSON_AddStringToObject(time, "now", c.now);
+        cJSON_AddNumberToObject(time, "last_sync_s_ago", c.last_sync_s_ago);
+    } else {
+        cJSON_AddNullToObject(time, "now");
+        cJSON_AddNullToObject(time, "last_sync_s_ago");
+    }
+}
+
 /* ---------- GET /api/status ---------- */
 static esp_err_t status_get(httpd_req_t *req)
 {
@@ -181,8 +203,49 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON *queue = cJSON_AddObjectToObject(root, "print_queue");
     cJSON_AddNumberToObject(queue, "waiting", waiting);    // tickets in line, not counting the one printing
     cJSON_AddBoolToObject(queue, "printing", printing);
+    add_clock_status(root);
     cJSON_AddNumberToObject(root, "free_heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/time ----------
+ * The page sends the computer's clock: {"unix_ms": 1795230331000,
+ *                                       "timezone": "America/Detroit",
+ *                                       "posix_tz": "EST5EDT,M3.2.0,M11.1.0"}
+ * "unix_ms" is the time now (milliseconds since 1970, UTC). The two timezone fields are
+ * optional and go together: the name people know, and the rule the board follows.
+ * Reply: {"ok":true,"applied":true|false, "time":{...as in /api/status}}. "applied" is false
+ * when the board kept its internet time instead (see clock.c). */
+static esp_err_t time_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *jms = cJSON_GetObjectItem(body, "unix_ms");
+    const cJSON *jtz = cJSON_GetObjectItem(body, "timezone");
+    const cJSON *jposix = cJSON_GetObjectItem(body, "posix_tz");
+
+    const char *error = NULL;
+    clock_browser_result_t res = CLOCK_BROWSER_INVALID;
+    if (cJSON_IsString(jtz) && cJSON_IsString(jposix) &&
+        clock_set_timezone(jtz->valuestring, jposix->valuestring) != ESP_OK) {
+        error = "bad_timezone";
+    } else if (!cJSON_IsNumber(jms) ||
+               (res = clock_set_from_browser((int64_t)jms->valuedouble)) == CLOCK_BROWSER_INVALID) {
+        error = "bad_time";
+    }
+    cJSON_Delete(body);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", !error);
+    if (error) {
+        cJSON_AddStringToObject(root, "error", error);
+    } else {
+        cJSON_AddBoolToObject(root, "applied", res == CLOCK_BROWSER_APPLIED);
+    }
+    add_clock_status(root);
     return send_json(req, root);
 }
 
@@ -452,6 +515,7 @@ void api_register(httpd_handle_t server)
     const httpd_uri_t routes[] = {
         { .uri = "/api/ping",         .method = HTTP_GET,  .handler = ping_get },
         { .uri = "/api/status",       .method = HTTP_GET,  .handler = status_get },
+        { .uri = "/api/time",         .method = HTTP_POST, .handler = time_post },
         { .uri = "/api/diag/ping",    .method = HTTP_GET,  .handler = diag_ping_get },
         { .uri = "/api/diag/printer-test", .method = HTTP_GET, .handler = diag_printer_test_get },
         { .uri = "/api/wifi/scan",    .method = HTTP_GET,  .handler = wifi_scan_get },
