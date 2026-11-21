@@ -21,6 +21,8 @@ typedef struct {
     uint16_t image_rows;    // number of rows in image (width is always PRINTER_WIDTH_DOTS)
     bool text_in_image;     // the page already drew number, source, title and body at the top of the image
                             // (in its own font), so the printer must not print them again in its built-in font
+    bool image_first;       // built-in font tickets only: print the image above the title (a weather symbol),
+                            // not below the text, and with no blank footer after it
     const uint8_t *layout;  // optional: the ticket as a list of parts, see "Layout" below. NULL if none
     size_t layout_len;      // number of bytes in layout
 } printer_job_t;

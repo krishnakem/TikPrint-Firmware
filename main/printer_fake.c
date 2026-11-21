@@ -130,6 +130,7 @@ static void remember(const printer_job_t *job)
         .image = s_image,
         .image_rows = rows,
         .text_in_image = s_image && job->text_in_image,
+        .image_first = s_image && job->image_first,
     };
     s_have_last = true;
     fake_last_job_unlock();
