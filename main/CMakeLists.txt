@@ -4,7 +4,7 @@ idf_component_register(
          "printer.c" "print_queue.c" "printer_fake.c" "printer_thermal.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_netif esp_event nvs_flash esp_http_server lwip esp_psram
-                  esp_wifi esp_timer esp_app_format esp_driver_uart
+                  esp_wifi esp_timer esp_app_format esp_driver_uart esp_driver_gpio
 )
 
 # --- Web UI: gzip each web file at build time and embed it in the firmware ---

@@ -66,6 +66,7 @@ web: GET /
 ```sh
 curl http://tikprint.local/api/status               # includes "print_queue": {"waiting": 2, "printing": true}
                                                     # and "time": {"set": true, "source": "browser", ...} (see Clock)
+                                                    # and "printer": {"status": "ok", "last_checked_s_ago": 3} (see Printer status)
 curl -d "{\"unix_ms\":$(date +%s)000,\"timezone\":\"America/Detroit\",\"posix_tz\":\"EST5EDT,M3.2.0,M11.1.0\"}" \
      http://tikprint.local/api/time                 # set the board's clock by hand (the page does this by itself)
 curl http://tikprint.local/api/wifi/scan
@@ -74,6 +75,7 @@ curl -X POST http://tikprint.local/api/wifi/forget
 curl http://tikprint.local/api/last-ticket          # the last ticket that started printing
 open http://tikprint.local/api/last-ticket.pbm      # its image, exactly as the printer got it
 curl "http://tikprint.local/api/diag/ping?ip=1.1.1.1"   # make the board ping something (troubleshooting)
+curl http://tikprint.local/api/diag/printer-status            # ask the printer how it is: raw answer bytes + meaning (see Printer status)
 curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
@@ -126,16 +128,22 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 
 | Board | Printer TTL socket |
 | --- | --- |
-| IO17 | pin labelled `TX` (green wire) |
+| IO17 | pin labelled `TX` (green wire): the board talks to the printer |
+| IO18 | pin labelled `RX` (yellow wire): the printer answers. Optional, **3.3 V only** |
 | GND | pin labelled `GND` (black wire) |
 
 - The printer labels its pins from the board's point of view: `TX` is where the
-  board's sending wire goes. The pin labelled `RX` (yellow) does not work.
+  board's sending wire goes, `RX` is where the board listens.
+- **Measure the yellow wire before connecting it.** With the printer on and idle, put a
+  multimeter between the `RX` pin and `GND`. About 3.3 V is fine. About 5 V will damage the
+  board: add a voltage divider first (for example 10 kΩ from the printer pin to IO18, and
+  20 kΩ from IO18 to GND).
+- The yellow wire is optional. Without it everything prints as before; the board just
+  cannot tell how the printer is (see Printer status).
 - The printer needs its own power supply. The board cannot power it.
 - Do **not** use the board pins labelled TX/RX: those carry the logs.
 - The pin, the serial speed (115200 baud, shown on the printer's self-test page) and whether the printer has a cutter
   are named constants at the top of `main/printer_thermal.c`.
-- The wire is one-way, so the board cannot tell if the printer is off or out of paper.
 - A ticket is sent in the background; a tall image takes a few seconds.
 - There is a print queue (`main/print_queue.c`). Pressing Print while a ticket is printing
   puts the new one in line, and the page says "Queued 0042, 2nd in line". Tickets print
@@ -147,6 +155,8 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 - Each waiting ticket is its own copy in PSRAM, freed when it has printed. The queue is
   not saved: tickets still waiting are lost if the board loses power.
 - The test line (`/api/diag/printer-test`) answers "busy" while anything is printing or waiting.
+  It no longer does the old "pin check" (the board listening to its own sending pin): the
+  receive side now listens to the printer.
 - The ticket is a small word processor. Select text, then use the toolbar above it:
   font, size (in points, true to size on paper), bold, italic, underline, and
   left / centre / right. One ticket can mix as many fonts and sizes as you like.
@@ -182,6 +192,54 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
   are named constants at the top of the "Upload area" code in `web/index.html`.
 - The ticket number is stored on the board and survives reboots.
 
+## Printer status
+
+With the yellow wire connected, the board can ask the printer how it is
+(ESC/POS "real-time status", `DLE EOT 1` to `4`, in `main/printer_thermal.c`).
+
+| Status | Meaning | Tickets |
+| --- | --- | --- |
+| `ok` | All good | print |
+| `paper_low` | Roll nearly finished | print |
+| `out_of_paper` | No paper | wait in the queue |
+| `cover_open` | Cover is open | wait in the queue |
+| `offline` | The printer says it is offline, without a reason | print |
+| `error` | Cutter jam or another fault | print |
+| `unknown` | No answer: no yellow wire, or the printer is off | print |
+
+- The board asks before every ticket, right after it, and otherwise every 10 seconds.
+- Out of paper or cover open pauses the queue: waiting tickets are kept, the board asks again
+  every 3 seconds, and printing carries on by itself once the problem is fixed.
+  `/api/status` then shows `"print_queue": {"waiting": 2, "printing": false, "paused": true}`.
+- No answer never stops a ticket. With no yellow wire the firmware behaves as it did before.
+- `/api/status` reports `"printer": {"status": "ok", "last_checked_s_ago": 3}`.
+- In the UI a small dot appears in the menu bar while there is a problem ("Out of paper",
+  "Cover open", "Paper running low", ...), with a short toast when it starts.
+- A ticket that was already being sent when the paper ran out is not sent again.
+- To check the wire, use the diagnostic endpoint (it answers "busy" while a ticket is being sent):
+
+```sh
+curl http://tikprint.local/api/diag/printer-status
+```
+
+```json
+{"ok":true,"answered":4,"status":"ok",
+ "queries":[{"query":"DLE EOT 1","about":"printer","raw":"0x16","valid":true},
+            {"query":"DLE EOT 2","about":"offline cause","raw":"0x12","valid":true},
+            {"query":"DLE EOT 3","about":"error cause","raw":"0x12","valid":true},
+            {"query":"DLE EOT 4","about":"paper sensor","raw":"0x12","valid":true}],
+ "decoded":{"online":true,"cover_open":false,"paper_out":false,"paper_low":false,
+            "cutter_error":false,"other_error":false}}
+```
+
+- A healthy printer answers `0x12` or `0x16` to every question.
+- `"raw": null` everywhere and `"status": "unknown"` means no byte came back: the wire is not
+  connected, it is on the wrong printer pin, or the printer is off.
+- `"valid": false` means a byte came back that cannot be a status byte: usually the wrong
+  serial speed or a loose ground wire. Such bytes are ignored.
+- The receive pin, the reply timeout and the meaning of each bit are named constants at the
+  top of `main/printer_thermal.c`. How often the board asks is at the top of `main/print_queue.c`.
+
 ## How the code is laid out
 
 | File | Job |
@@ -196,7 +254,7 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 | `main/clock.c` | The clock: time from the browser or the internet, timezone saved on the board (NVS) |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
 | `main/print_queue.c` | The print queue: tickets wait in line and print one at a time |
-| `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire |
+| `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire and reads its status back |
 | `main/printer_fake.c` | Fake printer: logs tickets and keeps the last one in PSRAM |
 | `main/web_server.c` | HTTP server on port 80; serves the embedded UI |
 | `web/index.html` | The UI. Gzipped and embedded into the firmware at build time |
