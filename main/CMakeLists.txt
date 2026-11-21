@@ -3,6 +3,7 @@ idf_component_register(
          "wifi_mgr.c" "counter.c" "clock.c" "settings.c" "api.c"
          "fw_update.c" "fw_github.c"
          "printer.c" "print_queue.c" "printer_fake.c" "printer_thermal.c"
+         "zip_table.c" "weather.c" "weather_ticket.c" "automations.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_netif esp_event nvs_flash esp_http_server lwip esp_psram
                   esp_wifi esp_timer esp_app_format esp_driver_uart esp_driver_gpio
@@ -35,7 +36,12 @@ endforeach()
 
 # --- Fonts the page draws ticket text with. Embedded as they are (woff2 is already compressed). ---
 # To add one: put the file in web/fonts, add its name here, in FONT_FILES in web_server.c,
-# and in FONTS in web/index.html.
+# and in FONTS in web/index.html. ("Printer default" in FONTS is not a file of its own: it is the printer's
+# built-in font, shown on screen with jetbrains-mono as a look-alike.)
 foreach(f "inter" "source-serif" "jetbrains-mono" "caveat" "nunito")
     target_add_binary_data(${COMPONENT_LIB} "${web_dir}/fonts/${f}.woff2" BINARY)
 endforeach()
+
+# --- ZIP code -> latitude/longitude table for the weather (see main/zip_table.c). ---
+# Made by tools/make_zip_table.py from the US Census ZCTA gazetteer (public domain).
+target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/../data/zip_table.bin" BINARY)

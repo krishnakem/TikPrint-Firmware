@@ -12,7 +12,7 @@
  * "TikPrint" is always there. The other three parts can each be switched off.
  */
 typedef struct {
-    char location[SETTINGS_LOCATION_MAX];   // e.g. "Los Angeles". "" = use the city of the timezone
+    char location[SETTINGS_LOCATION_MAX];   // e.g. "Los Angeles". "" = the town of the weather ZIP code, else the city of the timezone
     bool show_location;
     bool show_date;
     bool show_time;                          // the time includes the timezone's short name
@@ -26,3 +26,14 @@ void settings_get(settings_t *out);
 
 /** Change the settings and remember them across reboots. ESP_ERR_INVALID_ARG if the location or font name is not plain text. */
 esp_err_t settings_set(const settings_t *in);
+
+/* ---- Automations: weather ---- */
+
+#define SETTINGS_ZIP_MAX 6   // a US ZIP code is five digits, plus the ending 0
+
+/** The ZIP code weather tickets are for, e.g. "48104". "" = none chosen yet. */
+void settings_get_weather_zip(char out[SETTINGS_ZIP_MAX]);
+
+/** Change it and remember it across reboots. "" clears it.
+ *  ESP_ERR_INVALID_ARG if it is neither "" nor five digits. (Whether such a ZIP code exists is for zip_table.h.) */
+esp_err_t settings_set_weather_zip(const char *zip);

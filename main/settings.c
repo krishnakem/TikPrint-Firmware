@@ -1,6 +1,7 @@
 /*
- * Settings chosen in the web UI, saved on the board (NVS namespace "settings").
- * For now that is the ticket header: the location text and which parts to show.
+ * Settings chosen in the web UI, saved on the board (NVS namespace "settings"):
+ *   - the ticket header: the location text and which parts to show
+ *   - automations: the ZIP code weather tickets are for
  *
  * The web server changes them and the printer reads them, on different tasks,
  * so the copy in memory is guarded by one lock (s_lock).
@@ -22,6 +23,7 @@ static const char *TAG = "settings";
 static SemaphoreHandle_t s_lock;
 static settings_t s_now = { .location = "", .show_location = true, .show_date = true, .show_time = true,
                             .header_font = DEFAULT_HEADER_FONT };
+static char s_weather_zip[SETTINGS_ZIP_MAX] = "";
 
 /* Read one on/off setting, leaving *value alone if it was never saved. */
 static void load_flag(nvs_handle_t h, const char *key, bool *value)
@@ -118,7 +120,50 @@ esp_err_t settings_init(void)
         if (nvs_get_str(h, "header_font", font, &n) == ESP_OK && font[0]) {
             strlcpy(s_now.header_font, font, sizeof(s_now.header_font));
         }
+        char zip[SETTINGS_ZIP_MAX];
+        n = sizeof(zip);
+        if (nvs_get_str(h, "wx_zip", zip, &n) == ESP_OK) {
+            strlcpy(s_weather_zip, zip, sizeof(s_weather_zip));
+        }
         nvs_close(h);
+    }
+    return ESP_OK;
+}
+
+/* ---------- Automations: weather ---------- */
+
+void settings_get_weather_zip(char out[SETTINGS_ZIP_MAX])
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(out, s_weather_zip, SETTINGS_ZIP_MAX);
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t settings_set_weather_zip(const char *zip)
+{
+    size_t len = strlen(zip);
+    if (len != 0 && len != SETTINGS_ZIP_MAX - 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (const char *p = zip; *p; p++) {
+        if (*p < '0' || *p > '9') {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool changed = strcmp(s_weather_zip, zip) != 0;
+    strlcpy(s_weather_zip, zip, sizeof(s_weather_zip));
+    xSemaphoreGive(s_lock);
+    if (changed) {
+        nvs_handle_t h;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+            ESP_LOGW(TAG, "could not save the weather ZIP code");
+            return ESP_OK;   // it still applies until the next restart
+        }
+        nvs_set_str(h, "wx_zip", zip);
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGI(TAG, "weather ZIP code is now \"%s\"", zip);
     }
     return ESP_OK;
 }
