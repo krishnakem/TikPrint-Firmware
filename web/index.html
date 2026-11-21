@@ -203,6 +203,7 @@ button.kv:hover{background:var(--hover)}
 .bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
 /* The right-hand side of the "Check for updates" row: a short note in words, not in the code font */
 .kv span.say{display:inline-flex;align-items:center;gap:7px;font:13px var(--sans);color:var(--muted)}
+.kv span.say[hidden],.kv input[hidden]{display:none}   /* the rules above would otherwise show a hidden one */
 /* A yellow dot on the gear while newer firmware is waiting (yellow = something to do; green = all is well) */
 #gearBtn{position:relative}
 #gearBtn.new::after{content:"";position:absolute;top:4px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 2px var(--bg)}

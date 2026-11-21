@@ -291,6 +291,8 @@ static void send_job(const printer_job_t *job)
 {
     CMD("\x1B@");        // ESC @: reset the printer to its defaults
     CMD("\x1Bt\x00");    // ESC t 0: code page 437 (matches send_text above)
+    CMD("\x1C.");        // FS .: leave Chinese-character mode. In it the printer reads the degree sign plus the
+                         //   next letter as ONE Chinese character ("54" + a Chinese sign in place of the degree sign and F).
 
     if (job->layout && job->layout_len) {
         send_layout(job);
