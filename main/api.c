@@ -3,6 +3,7 @@
  *
  *   GET  /api/ping           empty reply; the UI calls it ~3x a second to notice unplugging fast
  *   GET  /api/status         board, USB, Wi-Fi, print queue and clock state
+ *   POST /api/settings       {"location": "...", "show_location": true, "show_date": true, "show_time": true}
  *   POST /api/time           {"unix_ms": N, "timezone": "America/Detroit", "posix_tz": "EST5EDT,..."}
  *   GET  /api/wifi/scan      nearby networks
  *   POST /api/wifi/connect   {"ssid": "...", "password": "..."}
@@ -32,6 +33,7 @@
 #include "counter.h"
 #include "printer.h"
 #include "clock.h"
+#include "settings.h"
 
 static const char *TAG = "api";
 
@@ -172,6 +174,18 @@ static void add_clock_status(cJSON *root)
     }
 }
 
+/* The "settings" part of /api/status: what the ticket header shows (see settings.h). */
+static void add_settings(cJSON *root)
+{
+    settings_t s;
+    settings_get(&s);
+    cJSON *set = cJSON_AddObjectToObject(root, "settings");
+    cJSON_AddStringToObject(set, "location", s.location);
+    cJSON_AddBoolToObject(set, "show_location", s.show_location);
+    cJSON_AddBoolToObject(set, "show_date", s.show_date);
+    cJSON_AddBoolToObject(set, "show_time", s.show_time);
+}
+
 /* ---------- GET /api/status ---------- */
 static esp_err_t status_get(httpd_req_t *req)
 {
@@ -215,8 +229,45 @@ static esp_err_t status_get(httpd_req_t *req)
         cJSON_AddNullToObject(prn, "last_checked_s_ago");
     }
     add_clock_status(root);
+    add_settings(root);
     cJSON_AddNumberToObject(root, "free_heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/settings ----------
+ * The ticket header: {"location": "Los Angeles", "show_location": true, "show_date": true, "show_time": true}.
+ * Send only what you want to change; the rest stays as it is.
+ * Reply: {"ok":true,"settings":{...all four...}}, or {"ok":false,"error":"bad_location",...}. */
+static esp_err_t settings_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    settings_t s;
+    settings_get(&s);
+    const cJSON *jloc = cJSON_GetObjectItem(body, "location");
+    const cJSON *jshow_loc = cJSON_GetObjectItem(body, "show_location");
+    const cJSON *jshow_date = cJSON_GetObjectItem(body, "show_date");
+    const cJSON *jshow_time = cJSON_GetObjectItem(body, "show_time");
+    bool too_long = cJSON_IsString(jloc) && strlen(jloc->valuestring) >= sizeof(s.location);
+    if (cJSON_IsString(jloc) && !too_long) {
+        strlcpy(s.location, jloc->valuestring, sizeof(s.location));
+    }
+    s.show_location = cJSON_IsBool(jshow_loc) ? cJSON_IsTrue(jshow_loc) : s.show_location;
+    s.show_date = cJSON_IsBool(jshow_date) ? cJSON_IsTrue(jshow_date) : s.show_date;
+    s.show_time = cJSON_IsBool(jshow_time) ? cJSON_IsTrue(jshow_time) : s.show_time;
+    cJSON_Delete(body);
+
+    bool ok = !too_long && settings_set(&s) == ESP_OK;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", ok);
+    if (!ok) {
+        cJSON_AddStringToObject(root, "error", "bad_location");
+        cJSON_AddStringToObject(root, "message", "The location is too long or not plain text");
+    }
+    add_settings(root);
     return send_json(req, root);
 }
 
@@ -584,6 +635,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/ping",         .method = HTTP_GET,  .handler = ping_get },
         { .uri = "/api/status",       .method = HTTP_GET,  .handler = status_get },
         { .uri = "/api/time",         .method = HTTP_POST, .handler = time_post },
+        { .uri = "/api/settings",     .method = HTTP_POST, .handler = settings_post },
         { .uri = "/api/diag/ping",    .method = HTTP_GET,  .handler = diag_ping_get },
         { .uri = "/api/diag/printer-test", .method = HTTP_GET, .handler = diag_printer_test_get },
         { .uri = "/api/diag/printer-status", .method = HTTP_GET, .handler = diag_printer_status_get },

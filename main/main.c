@@ -12,6 +12,7 @@
 #include "net_name.h"
 #include "wifi_mgr.h"
 #include "clock.h"
+#include "settings.h"
 #include "printer.h"
 #include "web_server.h"
 
@@ -35,6 +36,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    ESP_ERROR_CHECK(settings_init());
     ESP_ERROR_CHECK(clock_init());   // before Wi-Fi, so it hears "Wi-Fi got an address" and fetches internet time
     ESP_ERROR_CHECK(printer_init());
     ESP_ERROR_CHECK(usb_net_start());

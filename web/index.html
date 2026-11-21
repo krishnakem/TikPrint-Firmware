@@ -143,6 +143,14 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .ok-state .link{display:block;margin:12px auto 0;color:var(--muted);font-size:13px}
 .kv{display:flex;justify-content:space-between;padding:9px 10px;font-size:14px}
 .kv span:last-child{color:var(--muted);font:13px var(--mono)}
+.kv{align-items:center}
+.kv input[type=text]{width:150px;text-align:right;border:0;border-bottom:1px solid var(--line);background:transparent;font:13px var(--mono);color:var(--ink);outline:none;padding:2px 0}
+.kv input[type=text]:focus{border-color:var(--ink)}
+label.kv{cursor:pointer}
+/* On/off switch */
+.sw{appearance:none;-webkit-appearance:none;width:30px;height:18px;border-radius:9px;background:var(--line);position:relative;cursor:pointer;transition:.15s;margin:0;flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.15s}
+.sw:checked{background:var(--ok)} .sw:checked::after{left:14px}
 .note{display:flex;align-items:center;gap:8px;padding:9px 10px;font-size:14px;color:var(--muted)}
 .ok-state .link+.link{margin-top:6px}
 
@@ -199,6 +207,11 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
   <div class="kv"><span>PIN</span><span>Off</span></div>
   <div class="kv"><span>Clock</span><span id="setClock"></span></div>
   <div class="kv"><span>Firmware</span><span id="setFw"></span></div>
+  <h3>Ticket header</h3>
+  <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Location"></div>
+  <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
+  <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
+  <label class="kv"><span>Show time</span><input type="checkbox" class="sw" id="swTime"></label>
 </div>
 
 <main>
@@ -218,7 +231,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
 
   <!-- The ticket is the editor -->
   <div class="paper" id="paper">
-    <div class="p-head"><span>TIKPRINT</span><span id="date"></span></div>
+    <div class="p-head"><span id="hLeft">TikPrint</span><span id="hRight"></span></div>
     <div class="docwrap" id="docWrap"><div id="doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Ticket text"></div></div>
     <div class="p-img" id="pImg"><canvas id="prev" width="576" height="1" role="img" aria-label="Exactly what will print"></canvas><div class="p-wait" id="pWait">Preparing…</div><div class="p-nav" id="pNav"><button id="pPrev" aria-label="Previous part">‹</button><span id="pPart"></span><button id="pNext" aria-label="Next part">›</button></div><div class="p-note" id="pNote"></div><button id="rmImg" aria-label="Remove file">✕</button></div>
     <div class="p-src" id="pSrc"><span id="srcName"></span><button id="rmSrc">clear</button></div>
@@ -302,9 +315,25 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
 const $=id=>document.getElementById(id);
 let ticket=1, wifi=null;
 const pad=n=>'#'+String(n).padStart(4,'0');
-/* Top-right corner of the ticket: today's date, e.g. NOV 18, 2026 (from this device's clock; the board has none). */
-const showDate=()=>{$('date').textContent=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}).toUpperCase()};
-showDate();
+/* ---------- Ticket header ---------- */
+/* The line at the top of the ticket, on screen and on paper:
+     TikPrint | LOS ANGELES                 NOV 20, 2026 | 10:05 PM PST
+   "TikPrint" is always there. Location, date and time each have a switch in Settings, saved on the board.
+   Date and time are the BOARD's clock in the board's timezone (its last report plus the seconds since),
+   not this device's, and are left out while the board's clock isn't set.
+   With no location typed in, the city of the timezone is used ("America/Los_Angeles" -> LOS ANGELES). */
+let hdr={location:'',show_location:true,show_date:true,show_time:true}, tzCity='';
+let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "PST"}
+function headerParts(){
+  const now=boardTime?new Date(boardTime.wall+performance.now()-boardTime.at):null, fmt=o=>now.toLocaleString('en-US',{timeZone:'UTC',...o}).toUpperCase();
+  const place=(hdr.location||tzCity).toUpperCase();
+  const date=now&&hdr.show_date?fmt({month:'short',day:'numeric',year:'numeric'}):'';
+  const time=now&&hdr.show_time?fmt({hour:'numeric',minute:'2-digit'})+(boardTime.zone?' '+boardTime.zone:''):'';
+  return {left:'TikPrint'+(hdr.show_location&&place?' | '+place:''), right:[date,time].filter(Boolean).join(' | ')};
+}
+const showHeader=()=>{const h=headerParts();$('hLeft').textContent=h.left;$('hRight').textContent=h.right};
+const showDate=showHeader;
+showHeader(); setInterval(showHeader,5000);   // keeps the minute current between status updates
 const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(path,body,ms=4000){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),ms);
@@ -323,7 +352,6 @@ async function api(path,body,ms=4000){
    summer-time switch, which this page corrects the next time it is open after the switch. */
 const TIME_SEND_MS=5*60*1000;   // how often the page re-sends the time while it is open
 const TIME_RETRY_MS=30*1000;    // if the board says its clock isn't set, wait at least this long before re-sending
-const HEAD_SHOW_TIME=true;      // print the board's time next to the ticket number, e.g. "#0042   NOV 20, 10:05 PM EST" (only if the board's clock is set)
 const TZ_RULES={
   'EST5EDT,M3.2.0,M11.1.0':'America/New_York America/Detroit America/Toronto America/Indiana/Indianapolis America/Kentucky/Louisville',
   'CST6CDT,M3.2.0,M11.1.0':'America/Chicago America/Winnipeg',
@@ -375,7 +403,6 @@ function posixTz(iana){
   return fixedTz();
 }
 let clockSet=false, timeSentAt=0;
-let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "EST"}
 async function sendTime(){
   timeSentAt=Date.now();
   let zone='UTC'; try{zone=Intl.DateTimeFormat().resolvedOptions().timeZone||zone}catch(e){}
@@ -389,10 +416,37 @@ function showClock(t){
   // "2026-11-20T22:05:31-05:00" -> the 22:05:31 part as a number, so the page can keep counting from it
   const m=t.set&&/^(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)/.exec(t.now);
   boardTime=m?{wall:Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5],+m[6]),at:performance.now(),zone:t.zone||''}:null;
+  tzCity=/\//.test(t.timezone)?t.timezone.split('/').pop().replace(/_/g,' '):''; $('setLoc').placeholder=tzCity; showHeader();
   $('setClock').textContent=t.set?t.now.slice(11,16)+' · '+t.timezone.split('/').pop().replace(/_/g,' '):'Not set';
   $('setClock').title=t.set?`From the ${t.source==='internet'?'internet':'browser'}`:'Open this page or connect Wi-Fi to turn on schedules';
 }
 setInterval(()=>{if(!offline)sendTime()},TIME_SEND_MS);
+
+/* ---------- Settings: ticket header ---------- */
+/* The switches and the location live on the board, so every device and every ticket agree.
+   A change is sent at once; the board's reply is what the page then shows. */
+let savingSettings=0;
+function applySettings(x){
+  if(savingSettings)return;   // don't let an older status report undo a change that is on its way
+  const typing=document.activeElement===$('setLoc');   // keep what is being typed, in the box and in the preview
+  hdr=typing?{...x,location:$('setLoc').value.trim()}:x; showHeader();
+  if(!typing)$('setLoc').value=x.location;
+  $('swLoc').checked=x.show_location; $('swDate').checked=x.show_date; $('swTime').checked=x.show_time;
+}
+async function saveSettings(change){
+  hdr={...hdr,...change}; showHeader();   // show it straight away
+  savingSettings++;
+  let r=null; try{r=await api('/api/settings',change)}catch(e){}
+  savingSettings--;
+  if(r&&r.settings){if(!r.ok)toast(r.message||'Couldn’t save that');applySettings(r.settings)}
+  else toast('Couldn’t save the setting');
+}
+$('swLoc').onchange=e=>saveSettings({show_location:e.target.checked});
+$('swDate').onchange=e=>saveSettings({show_date:e.target.checked});
+$('swTime').onchange=e=>saveSettings({show_time:e.target.checked});
+$('setLoc').onchange=e=>saveSettings({location:e.target.value.trim()});
+$('setLoc').oninput=e=>{hdr={...hdr,location:e.target.value.trim()};showHeader()};   // live preview while typing
+$('setLoc').onkeydown=e=>{if(e.key==='Enter')e.target.blur()};
 
 /* ---------- Printer status ---------- */
 /* The board asks the printer how it is every few seconds (this needs the status wire).
@@ -434,6 +488,7 @@ function applyStatus(s){
   $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip; $('setFw').textContent='v'+s.version;
   $('okHost').textContent=s.hostname;
   // The board forgets the time when it loses power: give it back as soon as it says so (also the very first time).
+  if(s.settings)applySettings(s.settings);
   if(s.printer)showPrinter(s.printer,s.print_queue);
   if(s.time){showClock(s.time); if(!s.time.set&&Date.now()-timeSentAt>TIME_RETRY_MS)sendTime()}
   if(s.wifi&&!joining){$('okName').textContent=s.wifi.ssid;$('okIp').textContent=s.wifi.ip}
@@ -807,7 +862,10 @@ const FONTS=[
 const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, true to size on paper
 const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
 const TITLE_PX=Math.round(16*DOTS_PER_PT);         // heading size used when a connector fills the ticket
-const HEAD_SIZE=20;     // the "#0042  NOV 20, 10:05 PM  TODOIST · TODAY" line, in dots
+const HEAD_SIZE=20;     // the "#0042  TODOIST · TODAY" line, in dots
+const HDR_SIZE=17;      // the "TikPrint | LOS ANGELES ... NOV 20, 2026 | 10:05 PM PST" line above it, in dots
+const HDR_H=Math.round(HDR_SIZE*1.4)+8;   // room that line takes
+const HDR_GAP=24;       // least space between its left and right halves
 const TEXT_CUT=140;     // text is drawn in greys; darker than this (0-255) becomes a black dot. Higher = bolder
 const TEXT_MAXH=4096;   // most rows of text on one ticket (about 51 cm)
 const doc=$('doc');
@@ -924,11 +982,18 @@ $('tools').addEventListener('click',e=>{const b=e.target.closest('button'); if(b
 /* Turn the ticket's text into dots, PW wide. Returns {height, data} like rasterize(), or null if too long.
    The browser has already laid the text out at paper size, so we ask it where every word sits
    and draw each word at that spot. What you see is what prints. */
-/* The time for the head line, e.g. "   NOV 20, 10:05 PM EST". It is the BOARD's clock, in the board's timezone
-   (its last report plus the seconds since), not this device's. Empty if switched off or the board's clock isn't set. */
-const headTime=()=>HEAD_SHOW_TIME&&boardTime?'   '+new Date(boardTime.wall+performance.now()-boardTime.at).toLocaleString('en-US',{timeZone:'UTC',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).toUpperCase()+(boardTime.zone?' '+boardTime.zone:''):'';
+/* Draw the header line (see "Ticket header") across the top of the printed ticket: left part at the left edge,
+   date and time at the right edge. A location too long to fit is cut short with "…". */
+function drawHeader(g){
+  let {left,right}=headerParts();
+  g.font=`700 ${HDR_SIZE}px "Inter",Helvetica,Arial,sans-serif`;
+  const room=PW-(right?g.measureText(right).width+HDR_GAP:0);
+  while(left.length>9&&g.measureText(left).width>room)left=left.slice(0,-2)+'…';
+  g.fillText(left,0,2+HDR_SIZE);
+  if(right)g.fillText(right,PW-g.measureText(right).width,2+HDR_SIZE);
+}
 function docBits(source){
-  const box=doc.getBoundingClientRect(), k=box.width/PW, head=Math.round(HEAD_SIZE*1.4)+14;
+  const box=doc.getBoundingClientRect(), k=box.width/PW, head=HDR_H+Math.round(HEAD_SIZE*1.4)+14;
   const measure=mkCanvas(1,1).getContext('2d'), range=document.createRange(), items=[];
   const walker=document.createTreeWalker(doc,NodeFilter.SHOW_TEXT);
   for(let n;(n=walker.nextNode());){
@@ -954,7 +1019,8 @@ function docBits(source){
   const h=Math.ceil(top+drawn.reduce((b,it)=>Math.max(b,it.bottom),up)+8); if(h>TEXT_MAXH)return null;
   const c=mkCanvas(PW,h), g=c.getContext('2d',{willReadFrequently:true});
   g.fillStyle='#fff'; g.fillRect(0,0,PW,h); g.fillStyle='#000';
-  g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`; g.fillText(pad(ticket)+headTime()+(source?'   '+source:''),0,4+HEAD_SIZE);
+  g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`; drawHeader(g); g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`;
+  g.fillText(pad(ticket)+(source?'   '+source:''),0,HDR_H+4+HEAD_SIZE);
   for(const it of items){
     g.font=it.font; if(it.text)g.fillText(it.text,it.x,top+it.base);
     if(it.under)g.fillRect(it.x,Math.round(top+it.base+it.size*.1),it.w,Math.max(1,Math.round(it.size/14)));
