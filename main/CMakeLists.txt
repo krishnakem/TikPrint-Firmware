@@ -1,10 +1,10 @@
 idf_component_register(
     SRCS "main.c" "usb_net.c" "usb_dhcp.c" "web_server.c" "net_name.c"
          "wifi_mgr.c" "counter.c" "api.c"
-         "printer.c" "printer_fake.c"
+         "printer.c" "printer_fake.c" "printer_thermal.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_netif esp_event nvs_flash esp_http_server lwip esp_psram
-                  esp_wifi esp_timer esp_app_format
+                  esp_wifi esp_timer esp_app_format esp_driver_uart
 )
 
 # --- Web UI: gzip each web file at build time and embed it in the firmware ---

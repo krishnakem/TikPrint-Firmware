@@ -7,6 +7,7 @@
  *   POST /api/wifi/connect   {"ssid": "...", "password": "..."}
  *   POST /api/wifi/forget
  *   POST /api/print          print a ticket (binary body, see print_post)
+ *   GET  /api/diag/printer-test?baud=N  print one test line (optionally at another serial speed)
  *   GET  /api/last-ticket    the last ticket the printer received (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
  */
@@ -238,6 +239,37 @@ static esp_err_t wifi_connect_post(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/* ---------- GET /api/diag/printer-test?baud=9600 ----------
+ * Troubleshooting aid: print one line of text. Optional settings are changed first and last
+ * until reboot, to find what your printer needs without reflashing:
+ *   baud=N  serial speed    pin=N  board pin    invert=1  flip the signal (for RS-232 printers) */
+static esp_err_t diag_printer_test_get(httpd_req_t *req)
+{
+    char query[64] = "", baud[12] = "", pin[6] = "", inv[4] = "";
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    httpd_query_key_value(query, "baud", baud, sizeof(baud));
+    httpd_query_key_value(query, "pin", pin, sizeof(pin));
+    httpd_query_key_value(query, "invert", inv, sizeof(inv));
+    int b = atoi(baud);
+    int p = pin[0] ? atoi(pin) : -1;
+    // Pins that are safe to drive on this board: not USB, not the log port, not flash/PSRAM, not boot-mode pins.
+    bool pin_ok = p == -1 || (p >= 1 && p <= 18 && p != 3) || p == 21 || (p >= 38 && p <= 42) || p == 47 || p == 48;
+    cJSON *root = cJSON_CreateObject();
+    if (b != 0 && (b < 1200 || b > 921600)) {
+        cJSON_AddBoolToObject(root, "ok", false);
+        cJSON_AddStringToObject(root, "error", "bad_baud");
+    } else if (!pin_ok) {
+        cJSON_AddBoolToObject(root, "ok", false);
+        cJSON_AddStringToObject(root, "error", "bad_pin");
+    } else if (printer_thermal_test(b, p, inv[0] ? atoi(inv) != 0 : -1) != ESP_OK) {
+        cJSON_AddBoolToObject(root, "ok", false);
+        cJSON_AddStringToObject(root, "error", "busy");
+    } else {
+        cJSON_AddBoolToObject(root, "ok", true);
+    }
+    return send_json(req, root);
+}
+
 /* ---------- POST /api/wifi/forget ---------- */
 static esp_err_t wifi_forget_post(httpd_req_t *req)
 {
@@ -324,7 +356,12 @@ static esp_err_t print_post(httpd_req_t *req)
     }
 
     job.number = counter_get() + 1;
-    if (printer_print_job(&job) != ESP_OK) {
+    esp_err_t perr = printer_print_job(&job);
+    if (perr == ESP_ERR_INVALID_STATE) {
+        ret = print_fail(req, "busy", "Still printing the last ticket");
+        goto out;
+    }
+    if (perr != ESP_OK) {
         ret = print_fail(req, "printer_error", "The printer reported an error");
         goto out;
     }
@@ -392,6 +429,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/ping",         .method = HTTP_GET,  .handler = ping_get },
         { .uri = "/api/status",       .method = HTTP_GET,  .handler = status_get },
         { .uri = "/api/diag/ping",    .method = HTTP_GET,  .handler = diag_ping_get },
+        { .uri = "/api/diag/printer-test", .method = HTTP_GET, .handler = diag_printer_test_get },
         { .uri = "/api/wifi/scan",    .method = HTTP_GET,  .handler = wifi_scan_get },
         { .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = wifi_connect_post },
         { .uri = "/api/wifi/forget",  .method = HTTP_POST, .handler = wifi_forget_post },

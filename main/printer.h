@@ -19,7 +19,7 @@ typedef struct {
     uint16_t image_rows;    // number of rows in image (width is always PRINTER_WIDTH_DOTS)
 } printer_job_t;
 
-/** A printer driver. The fake printer implements this now; the real thermal printer will later. */
+/** A printer driver. There are two: the real thermal printer and a fake one that only logs. */
 typedef struct {
     const char *name;
     esp_err_t (*init)(void);
@@ -41,3 +41,8 @@ const char *printer_name(void);
 
 /* Available drivers */
 extern const printer_driver_t printer_fake_driver;
+extern const printer_driver_t printer_thermal_driver;
+
+/** Thermal driver only: print one test line. The settings given are changed first and stay until reboot:
+ *  baud > 0 = serial speed, pin >= 0 = board pin, invert 0/1 = flip the signal (-1 = leave as is). */
+esp_err_t printer_thermal_test(int baud, int pin, int invert);
