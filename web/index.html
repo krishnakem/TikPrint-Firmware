@@ -1196,6 +1196,17 @@ new ResizeObserver(fit).observe(doc); addEventListener('resize',fit); fit();
 let savedSel=null, sizePx=Math.round(10*DOTS_PER_PT), sizeHold=null;
 document.addEventListener('selectionchange',()=>{
   const sel=getSelection();
+  // The cursor must always be inside a line. When the text box gets focus without a click on a line
+  // (Tab, the Print button on an empty ticket, ...) the browser puts it in the box itself, "between"
+  // the lines: it then shows at the very top in the body size, next to the big "Title" hint, and the
+  // toolbar shows the wrong style. Move it into the line it is next to.
+  if(sel.isCollapsed&&sel.anchorNode===doc&&doc.childNodes.length){
+    const atEnd=sel.anchorOffset>=doc.childNodes.length, line=lineAt(doc,sel.anchorOffset);
+    if(line&&!isPic(line)){
+      if(atEnd&&line.textContent){sel.selectAllChildren(line);sel.collapseToEnd()}else caretTo(line);
+      return;   // moving it fires this event again, now with the cursor in the line
+    }
+  }
   if(sel.rangeCount&&doc.contains(sel.anchorNode)){savedSel=sel.getRangeAt(0).cloneRange();showState()}
 });
 /* ---- Printer font ---- */
@@ -1485,7 +1496,7 @@ const nth=n=>n+(n%100>10&&n%100<14?'th':['th','st','nd','rd'][n%10]||'th');   //
 const FEED_MS=px=>Math.round(Math.min(1100,Math.max(550,px*1.1)));   // how long the ticket takes to fly off, from the distance in pixels
 async function doPrint(){
   if(printing||offline)return;
-  if(!docText()&&!doc.querySelector('.pic')&&!$('pImg').classList.contains('on')){doc.focus();return}
+  if(!docText()&&!doc.querySelector('.pic')&&!$('pImg').classList.contains('on')){doc.focus();caretTo(doc.firstElementChild);return}
   if($('pImg').classList.contains('on')&&!imgBits){toast('Still preparing the file…');return}
   const body=printBody(); if(!body){toast('Too much text for one ticket');return}
   printing=true; $('printBtn').disabled=true;   // only while the ticket uploads: the board queues it, so Print works again right after
@@ -1515,7 +1526,7 @@ async function doPrint(){
     // a fresh ticket rises out of the drop box
     p.classList.remove('out'); p.classList.add('in');
     p.addEventListener('animationend',()=>p.classList.remove('in'),{once:true});
-    doc.focus();
+    doc.focus(); caretTo(doc.firstElementChild);   // cursor in the Title line, not loose at the top of the box
   }else{
     p.classList.remove('out'); p.classList.add('back');   // the same ticket drops back in, nothing is lost
     p.addEventListener('animationend',()=>p.classList.remove('back'),{once:true});
