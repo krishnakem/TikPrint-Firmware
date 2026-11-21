@@ -188,6 +188,9 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 - The pin, the serial speed (115200 baud, shown on the printer's self-test page) and whether the printer has a cutter
   are named constants at the top of `main/printer_thermal.c`.
 - A ticket is sent in the background; a tall image takes a few seconds.
+- Dark images are sent more slowly than light ones, so the printer can keep up. Without that, a dark
+  picture comes out squashed towards its end (the printer drops rows it has no room for). How much
+  slower is `PACE_US_PER_BLACK_DOT` at the top of `main/printer_thermal.c`.
 - There is a print queue (`main/print_queue.c`). Pressing Print while a ticket is printing
   puts the new one in line, and the page says "Queued 0042, 2nd in line". Tickets print
   in the order they were sent.
