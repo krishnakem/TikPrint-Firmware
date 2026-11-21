@@ -219,11 +219,15 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 - To run with no printer attached, point `s_driver` in `main/printer.c` at `printer_fake_driver`.
   The queue works the same way with it.
 
+- A file gets onto the ticket by dropping it, by choosing it, or by pasting it (Cmd+V / Ctrl+V):
+  a copied picture, a screenshot, a file copied in Finder, or copied SVG code. JPG, PNG, SVG and PDF work.
+- An SVG has no fixed size, so the page draws it at twice the paper's width before turning it into
+  dots (`SVG_PX` in `web/index.html`). A small icon comes out as sharp as a large drawing.
 - Files are prepared in the browser: blank margins are trimmed, the content is
   scaled to 576 dots wide and turned into pure black and white dots (a clean
   cut for text and line art, dithering for photos). The ticket on screen shows
   exactly those dots, and exactly those dots are sent. The board never decodes
-  JPG, PNG or PDF.
+  JPG, PNG, SVG or PDF.
 - PDFs are drawn in the browser by pdf.js 4.10.38 (Apache-2.0), kept in
   `web/vendor/` and embedded in the firmware so it works with no internet.
   Pages are stacked into one strip. One print holds at most 4096 rows (about
