@@ -13,6 +13,9 @@
  *   GET  /api/diag/printer-status       ask the printer how it is; raw answer bytes + what they mean
  *   GET  /api/last-ticket    the last ticket that started printing (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
+ *   POST /api/update/check   ask GitHub whether there is newer firmware (the answer shows up in /api/status)
+ *   POST /api/update/install download the newer firmware from GitHub and restart into it
+ *   POST /api/update         install firmware from a file. Only over the USB cable (see update_post)
  */
 #include <string.h>
 #include <stdlib.h>
@@ -20,6 +23,7 @@
 #include "esp_log.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_ota_ops.h"
 #include "lwip/sockets.h"
 #include "cJSON.h"
 #include "ping/ping_sock.h"
@@ -34,6 +38,8 @@
 #include "printer.h"
 #include "clock.h"
 #include "settings.h"
+#include "fw_github.h"
+#include "fw_update.h"
 
 static const char *TAG = "api";
 
@@ -41,6 +47,9 @@ static const char *TAG = "api";
 #define MAX_NETS 24
 #define MAX_PRINT_META (16 * 1024)
 #define MAX_PRINT_BODY (4 + MAX_PRINT_META + PRINTER_MAX_ROWS * PRINTER_WIDTH_BYTES)
+#define UPDATE_CHUNK 4096          // a firmware upload is written to flash in pieces of this size
+#define UPDATE_MAX_STALLS 6        // give up on an upload after this many 5 s waits in a row with no data
+#define UPDATE_LOG_EVERY (256 * 1024)
 
 /* Send a cJSON object as the response and free it. */
 static esp_err_t send_json(httpd_req_t *req, cJSON *root)
@@ -98,6 +107,52 @@ static bool request_came_over_usb(httpd_req_t *req)
         memcpy(&local, &((struct sockaddr_in6 *)&ss)->sin6_addr.s6_addr[12], 4);
     }
     return local == ipaddr_addr(USB_NET_IP_STR);
+}
+
+/* The other end's IPv4 address, or 0 if it can't be told. */
+static uint32_t request_peer_ip(httpd_req_t *req)
+{
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof(ss);
+    uint32_t peer = 0;
+    if (getpeername(httpd_req_to_sockfd(req), (struct sockaddr *)&ss, &len) != 0) {
+        return 0;
+    }
+    if (ss.ss_family == AF_INET) {
+        peer = ((struct sockaddr_in *)&ss)->sin_addr.s_addr;
+    } else if (ss.ss_family == AF_INET6) {
+        memcpy(&peer, &((struct sockaddr_in6 *)&ss)->sin6_addr.s6_addr[12], 4);
+    }
+    return peer;
+}
+
+/* Stricter than request_came_over_usb, for things only someone holding the board may do:
+ * the request was sent to 192.168.7.1 AND comes from an address on the USB network.
+ * A device on Wi-Fi can aim a request at 192.168.7.1, but it cannot also sit at a
+ * 192.168.7.x address, because the board's answers to those go down the cable. */
+static bool request_is_from_usb_cable(httpd_req_t *req)
+{
+    uint32_t mask = ipaddr_addr(USB_NET_MASK_STR);
+    uint32_t peer = request_peer_ip(req);
+    return request_came_over_usb(req) && peer != 0 && (peer & mask) == (ipaddr_addr(USB_NET_IP_STR) & mask);
+}
+
+/* Was this request sent by the TikPrint page itself (or by a tool like curl)?
+ * A browser adds an "Origin" header saying which site the page that sent the request came
+ * from. If that is some other website, the request is refused: otherwise any web page open
+ * on a computer near the board could quietly send it new firmware. curl sends no Origin. */
+static bool request_is_same_site(httpd_req_t *req)
+{
+    char origin[160] = "", host[128] = "", expect[160];
+    esp_err_t err = httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin));
+    if (err == ESP_ERR_NOT_FOUND) {
+        return true;
+    }
+    if (err != ESP_OK || httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK) {
+        return false;
+    }
+    snprintf(expect, sizeof(expect), "http://%s", host);
+    return strcmp(origin, expect) == 0;
 }
 
 /* ---------- GET /api/ping ---------- */
@@ -231,6 +286,32 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     add_clock_status(root);
     add_settings(root);
+    // Firmware: "id" changes with every build, "slot" is where it runs from, "boot_id" is a new number
+    // after every restart. The rest is about updates from GitHub (see fw_github.h): "latest" is the newest
+    // release ("" if not known), "available" says it is newer than this one, "state" is what the board is
+    // doing about it (idle, checking, downloading, restarting), "progress" is the download in percent.
+    const esp_app_desc_t *app = esp_app_get_description();
+    char built[40];
+    snprintf(built, sizeof(built), "%s %s", app->date, app->time);
+    cJSON_AddNumberToObject(root, "boot_id", fw_update_boot_id());
+    cJSON *upd = cJSON_AddObjectToObject(root, "update");
+    cJSON_AddStringToObject(upd, "id", esp_app_get_elf_sha256_str());
+    cJSON_AddStringToObject(upd, "built", built);
+    cJSON_AddStringToObject(upd, "slot", fw_update_slot());
+    cJSON_AddBoolToObject(upd, "on_trial", fw_update_on_trial());
+    cJSON_AddNumberToObject(upd, "max_bytes", fw_update_max_size());
+    fw_github_status_t gh;
+    fw_github_get_status(&gh);
+    cJSON_AddStringToObject(upd, "state", fw_github_state_name(gh.state));
+    cJSON_AddStringToObject(upd, "latest", gh.latest);
+    cJSON_AddBoolToObject(upd, "available", gh.available);
+    cJSON_AddNumberToObject(upd, "progress", gh.progress);
+    cJSON_AddStringToObject(upd, "error", gh.error);
+    if (gh.checked) {
+        cJSON_AddNumberToObject(upd, "checked_s_ago", gh.checked_s_ago);
+    } else {
+        cJSON_AddNullToObject(upd, "checked_s_ago");
+    }
     cJSON_AddNumberToObject(root, "free_heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return send_json(req, root);
@@ -636,6 +717,224 @@ static esp_err_t last_ticket_pbm_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+/* Say no: {"ok":false,"error":"...","message":"..."} with an HTTP status to match. */
+static esp_err_t refuse(httpd_req_t *req, const char *http_status, const char *error, const char *message)
+{
+    cJSON *root = cJSON_CreateObject();
+    httpd_resp_set_status(req, http_status);
+    cJSON_AddBoolToObject(root, "ok", false);
+    cJSON_AddStringToObject(root, "error", error);
+    cJSON_AddStringToObject(root, "message", message);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/update/check ----------
+ * Ask GitHub for the latest release. Replies {"ok":true} at once; the answer arrives a
+ * second or two later in /api/status ("update": state, latest, available, error). */
+static esp_err_t update_check_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    if (fw_github_check_now() != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is already checking or updating");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/update/install ----------
+ * Download the latest release from GitHub and restart into it. Only does anything if a
+ * check found a release newer than the running firmware. Replies {"ok":true} at once;
+ * follow the download in /api/status ("update": state, progress, error). */
+static esp_err_t update_install_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    int waiting;
+    bool printing, paused;
+    printer_queue_info(&waiting, &printing, &paused);
+    if (printing || waiting > 0) {
+        return refuse(req, "409 Conflict", "busy", "Tickets are still printing or waiting. Update when the queue is empty");
+    }
+    if (fw_update_on_trial()) {
+        return refuse(req, "409 Conflict", "on_trial", "The printer was updated a moment ago. Try again in a few seconds");
+    }
+    esp_err_t err = fw_github_install();
+    if (err == ESP_ERR_NOT_FOUND) {
+        return refuse(req, "409 Conflict", "up_to_date", "There is no newer firmware to install. Check for updates first");
+    }
+    if (err != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is already checking or updating");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/update ----------
+ * Install firmware from a file, for trying a build that is not a release yet.
+ * The body is the firmware file itself (build/tikprint_firmware.bin):
+ *
+ *   curl --data-binary @build/tikprint_firmware.bin http://192.168.7.1/api/update
+ *
+ * This only works over the USB cable. Over Wi-Fi the only firmware the board accepts is
+ * a release from GitHub (see fw_github.c), so nobody on the network can hand it anything else.
+ *
+ * The file is written to the firmware slot that is not running, checked, and then the board
+ * restarts into it (see fw_update.c). The reply comes just before the restart:
+ *   {"ok":true,"bytes":1832848,"slot":"ota_0","message":"Update installed. Restarting"}
+ * On any failure the running firmware is untouched:
+ *   {"ok":false,"error":"...","message":"..."}
+ *   error: other_site, usb_only, bad_size, busy, not_firmware, on_trial, bad_file, failed
+ * The web server handles one request at a time, so the board answers nothing else during
+ * the upload. */
+static uint8_t s_update_buf[UPDATE_CHUNK];
+
+/* Read up to want bytes of the upload. Returns how many arrived, or -1 if the upload broke off. */
+static int update_recv(httpd_req_t *req, uint8_t *buf, size_t want)
+{
+    for (int stalls = 0; stalls < UPDATE_MAX_STALLS; stalls++) {
+        int n = httpd_req_recv(req, (char *)buf, want);
+        if (n > 0) {
+            return n;
+        }
+        if (n != HTTPD_SOCK_ERR_TIMEOUT) {
+            return -1;   // the connection dropped
+        }
+    }
+    return -1;           // nothing for too long
+}
+
+/* Say no to an upload, then read and throw away what is still coming, so the sender
+ * gets to see the answer instead of a broken connection. */
+static esp_err_t update_refuse(httpd_req_t *req, size_t left, cJSON *root)
+{
+    esp_err_t err = send_json(req, root);
+    while (err == ESP_OK && left > 0) {
+        int n = update_recv(req, s_update_buf, left < UPDATE_CHUNK ? left : UPDATE_CHUNK);
+        if (n <= 0) {
+            return ESP_FAIL;
+        }
+        left -= n;
+    }
+    return err;
+}
+
+static esp_err_t update_fail(httpd_req_t *req, size_t left, const char *http_status, const char *error,
+                             const char *message)
+{
+    ESP_LOGW(TAG, "firmware update refused: %s", error);
+    cJSON *root = cJSON_CreateObject();
+    httpd_resp_set_status(req, http_status);
+    cJSON_AddBoolToObject(root, "ok", false);
+    cJSON_AddStringToObject(root, "error", error);
+    cJSON_AddStringToObject(root, "message", message);
+    return update_refuse(req, left, root);
+}
+
+static esp_err_t update_post(httpd_req_t *req)
+{
+    size_t len = req->content_len, left = len;
+    ESP_LOGI(TAG, "firmware update offered: %u bytes", (unsigned)len);
+
+    if (!request_is_same_site(req)) {
+        return update_fail(req, left, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+
+    // 1. Only over the USB cable (see the note above).
+    if (!request_is_from_usb_cable(req)) {
+        return update_fail(req, left, "403 Forbidden", "usb_only",
+                           "A firmware file can only be installed over the USB cable, at http://" USB_NET_IP_STR
+                           ". Over Wi-Fi, use Check for updates");
+    }
+
+    // 2. Is it a sensible moment, and a sensible size?
+    if (len < FW_UPDATE_HEADER_BYTES || len > fw_update_max_size()) {
+        return update_fail(req, left, "400 Bad Request", "bad_size", "That file is too small or too large to be firmware");
+    }
+    int waiting;
+    bool printing, paused;
+    printer_queue_info(&waiting, &printing, &paused);
+    if (printing || waiting > 0) {
+        return update_fail(req, left, "409 Conflict", "busy",
+                           "Tickets are still printing or waiting. Update when the queue is empty");
+    }
+    fw_github_status_t gh;
+    fw_github_get_status(&gh);
+    if (gh.state != FW_GITHUB_IDLE) {
+        return update_fail(req, left, "409 Conflict", "busy", "The printer is already checking or updating");
+    }
+
+    // 3. The first piece of the file says what it is: refuse anything that is not TikPrint firmware.
+    size_t got = 0, first = len < UPDATE_CHUNK ? len : UPDATE_CHUNK;
+    while (got < first) {
+        int n = update_recv(req, s_update_buf + got, first - got);
+        if (n <= 0) {
+            ESP_LOGW(TAG, "firmware upload broke off");
+            return ESP_FAIL;
+        }
+        got += n;
+    }
+    left -= got;
+    if (!fw_update_header_ok(s_update_buf, got)) {
+        return update_fail(req, left, "400 Bad Request", "not_firmware",
+                           "That is not a TikPrint firmware file (use build/tikprint_firmware.bin)");
+    }
+
+    // 4. Write it to the free slot as it arrives.
+    esp_err_t err = fw_update_begin();
+    if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+        return update_fail(req, left, "409 Conflict", "on_trial",
+                           "The printer was updated a moment ago. Try again in a few seconds");
+    }
+    if (err != ESP_OK) {
+        return update_fail(req, left, "500 Internal Server Error", "failed",
+                           "The printer has no free firmware slot. Flash it once with the USB cable");
+    }
+    size_t written = 0, next_log = UPDATE_LOG_EVERY;
+    while (true) {
+        err = fw_update_write(s_update_buf, got);
+        if (err != ESP_OK) {
+            fw_update_abort();
+            return update_fail(req, left, "400 Bad Request", "bad_file", "The printer could not write that file");
+        }
+        written += got;
+        if (written >= next_log) {
+            ESP_LOGI(TAG, "firmware update: %u of %u KB", (unsigned)(written / 1024), (unsigned)(len / 1024));
+            next_log += UPDATE_LOG_EVERY;
+        }
+        if (left == 0) {
+            break;
+        }
+        int n = update_recv(req, s_update_buf, left < UPDATE_CHUNK ? left : UPDATE_CHUNK);
+        if (n <= 0) {
+            fw_update_abort();
+            ESP_LOGW(TAG, "firmware upload broke off after %u bytes", (unsigned)written);
+            return ESP_FAIL;   // nobody is left to answer
+        }
+        got = n;
+        left -= n;
+    }
+
+    // 5. Check the whole file, select it, answer, restart.
+    err = fw_update_finish();
+    if (err != ESP_OK) {
+        fw_update_abort();
+        return update_fail(req, 0, "400 Bad Request", "bad_file",
+                           "The file arrived damaged or is not complete. Nothing was changed");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "bytes", written);
+    cJSON_AddStringToObject(root, "message", "Update installed. Restarting");
+    esp_err_t sent = send_json(req, root);
+    fw_update_restart_soon();
+    return sent;
+}
+
 void api_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -652,6 +951,9 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/print",        .method = HTTP_POST, .handler = print_post },
         { .uri = "/api/last-ticket",  .method = HTTP_GET,  .handler = last_ticket_get },
         { .uri = "/api/last-ticket.pbm", .method = HTTP_GET, .handler = last_ticket_pbm_get },
+        { .uri = "/api/update/check", .method = HTTP_POST, .handler = update_check_post },
+        { .uri = "/api/update/install", .method = HTTP_POST, .handler = update_install_post },
+        { .uri = "/api/update",       .method = HTTP_POST, .handler = update_post },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(server, &routes[i]);

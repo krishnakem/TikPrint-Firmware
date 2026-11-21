@@ -4,7 +4,7 @@ Firmware for the Waveshare ESP32-S3 board (32 MB flash, 16 MB PSRAM).
 Plug the board into a computer with USB-C and it appears as a small network.
 The web UI is at **http://tikprint.local** (or **http://192.168.7.1** if the name does not resolve).
 
-Status: **Milestone 5** (tickets print on the real thermal printer. Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi).
+Status: **Milestone 5** (tickets print on the real thermal printer. Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi. The board updates itself from GitHub releases: Settings > Check for updates).
 
 ## The one USB-C port is two devices
 
@@ -61,6 +61,54 @@ web: GET /
 4. Any device on that same network can now open http://tikprint.local.
    The board remembers the network and rejoins it after a reboot.
 
+## Firmware updates
+
+The board gets new firmware from the **releases of this GitHub repository**.
+
+1. Open http://tikprint.local, click the gear, then **Check for updates**.
+2. If there is a newer release the row becomes **Update to v0.3.0**. Click it, then **Install**.
+3. The board downloads the firmware from GitHub itself (about a minute), restarts, and the page reloads.
+
+- The board also checks by itself once a day. A green dot on the gear means an update is waiting.
+  Nothing is ever installed without a click.
+- It needs Wi-Fi with internet. Over the USB cable alone the board cannot reach GitHub.
+- Over Wi-Fi this is the **only** way in: the board accepts nothing but a release from this
+  repository, fetched over HTTPS with GitHub's certificate checked. So whoever can publish a
+  release here decides what the printers run, and nobody else on the network can.
+- It only moves to a newer version, never back.
+- An update is refused while tickets are printing or waiting.
+
+### Publishing a release
+
+1. Change the version number in `CMakeLists.txt`: `set(PROJECT_VER "0.3.0")`.
+2. Commit and push to `main`.
+
+That is all. GitHub (`.github/workflows/release.yml`) builds the firmware and publishes a
+release called `v0.3.0` with `tikprint_firmware.bin` attached. It takes a few minutes; watch it
+under the repository's **Actions** tab. A push that does not change the version number publishes nothing.
+
+### How an update works (`main/fw_update.c`, `main/fw_github.c`, `partitions.csv`)
+
+- The flash has three firmware slots. The cable writes `factory`. An update goes into
+  whichever of `ota_0` / `ota_1` is not running, is checked, and the board restarts into it.
+- **Safety net:** new firmware is on trial for 15 seconds. If it crashes or restarts before
+  that, the board goes back to the firmware it had. The page then says "Update undone".
+- **The cable always wins.** `idf.py flash` puts the board back on the `factory` slot, whatever
+  was installed before. Use it if an update ever leaves the board unreachable.
+- Settings shows what is running, e.g. `v0.2.0 · a1b2c3d`. The second part is different for every build.
+- Logs still need the cable (`idf.py monitor`).
+
+### Trying a build that is not a release
+
+Over the **USB cable** a firmware file can be sent straight from the computer, without flashing:
+open http://192.168.7.1, click the gear, then **Install from file** (the row only shows over USB), or:
+
+```sh
+curl --data-binary @build/tikprint_firmware.bin http://192.168.7.1/api/update
+```
+
+Over Wi-Fi this is refused.
+
 ## API quick reference
 
 ```sh
@@ -79,17 +127,14 @@ curl http://tikprint.local/api/diag/printer-status            # ask the printer 
 curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
+curl -X POST http://tikprint.local/api/update/check     # ask GitHub for the latest release (answer shows up in /api/status)
+curl -X POST http://tikprint.local/api/update/install   # download it and restart into it (only if it is newer)
+curl --data-binary @build/tikprint_firmware.bin http://192.168.7.1/api/update   # install from a file: USB cable only
 ```
 
-`POST /api/print` (what the Print button sends) answers as soon as the ticket is in the print queue:
-
-```json
-{"ok":true,"number":42,"ticket_count":42,"queued":true,"position":2}
-```
-
-- `position` is the ticket's place in line: 0 = printing now, 2 = two tickets ahead of it.
-- `queued` is true when it has to wait (`position` above 0).
-- If the queue is full: `{"ok":false,"error":"queue_full","message":"The print queue is full, try again in a moment"}`.
+`/api/status` also reports the firmware: `"boot_id": 123456789` (new after every restart) and
+`"update": {"id": "a1b2c3d4e", "slot": "ota_0", "on_trial": false, "state": "idle", "latest": "0.3.0", "available": true, "progress": 0, "error": "", "checked_s_ago": 40, ...}`.
+`state` is `idle`, `checking`, `downloading` or `restarting`.
 
 ## Clock
 
@@ -277,6 +322,9 @@ curl http://tikprint.local/api/diag/printer-status
 | `main/counter.c` | Ticket counter saved on the board (NVS) |
 | `main/settings.c` | Settings saved on the board (NVS): what the ticket header shows |
 | `main/clock.c` | The clock: time from the browser or the internet, timezone saved on the board (NVS) |
+| `main/fw_update.c` | Installing new firmware: write to the spare slot, check, restart, go back if it fails |
+| `main/fw_github.c` | Finds and downloads new firmware from this repository's GitHub releases |
+| `.github/workflows/release.yml` | Builds and publishes a release when the version number changes |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
 | `main/print_queue.c` | The print queue: tickets wait in line and print one at a time |
 | `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire and reads its status back |
@@ -287,7 +335,7 @@ curl http://tikprint.local/api/diag/printer-status
 | `web/vendor/` | pdf.js (library + worker), embedded the same way. To update: replace both files and change `PDFJS` in `web/index.html` |
 | `tools/gzip_file.py` | Build helper that gzips the UI |
 | `sdkconfig.defaults` | Board settings (flash, PSRAM, UART logs, USB mode) |
-| `partitions.csv` | How the flash is divided up |
+| `partitions.csv` | How the flash is divided up (saved settings, three firmware slots) |
 
 ## Notes
 

@@ -1,0 +1,52 @@
+# Builds the firmware and publishes it as a GitHub release.
+#
+# To release: change the version number in CMakeLists.txt (set(PROJECT_VER "0.3.0")),
+# commit and push to main. This workflow sees that there is no release "v0.3.0" yet,
+# builds the firmware and attaches tikprint_firmware.bin to a new release with that name.
+# Printers find it with "Check for updates" (main/fw_github.c).
+#
+# A push that does not change the version number does nothing here.
+name: Release firmware
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version number
+        id: version
+        run: |
+          version=$(sed -n 's/^set(PROJECT_VER "\(.*\)")$/\1/p' CMakeLists.txt)
+          if [ -z "$version" ]; then echo "No PROJECT_VER found in CMakeLists.txt"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "Release v$version already exists: nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the firmware (ESP-IDF v6.1.1)
+        if: steps.version.outputs.needed == 'true'
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1.1
+          target: esp32s3
+
+      - name: Publish the release
+        if: steps.version.outputs.needed == 'true'
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" build/tikprint_firmware.bin \
+            --title "TikPrint v${{ steps.version.outputs.version }}" \
+            --target "$GITHUB_SHA" --generate-notes

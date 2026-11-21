@@ -1,5 +1,18 @@
 # TikPrint partition table (board has 32 MB flash; most of it is left free for later).
+#
+# Three firmware slots, 4 MB each:
+#   factory  what the USB cable flashes (idf.py flash). Always there as a way back.
+#   ota_0    } firmware sent over the network (POST /api/update) goes into whichever of
+#   ota_1    } these two is not running, then the board restarts into it.
+# otadata is a small note for the bootloader: which slot to start. Flashing by cable
+# wipes that note, so the board then starts from "factory" again.
+#
+# nvs (saved settings) and factory are where they have always been, so nothing saved is lost.
+#
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x10000
 phy_init,   data, phy,     0x19000,  0x1000
+otadata,    data, ota,     0x1a000,  0x2000
 factory,    app,  factory, 0x20000,  0x400000
+ota_0,      app,  ota_0,   0x420000, 0x400000
+ota_1,      app,  ota_1,   0x820000, 0x400000

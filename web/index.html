@@ -72,7 +72,8 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 
 /* formatting toolbar */
 .tools{width:var(--col);margin-bottom:12px;display:flex;align-items:center;gap:4px;padding:5px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
-.tools select{height:30px;min-width:0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);font-size:13px;padding:0 2px}
+.tools select{height:30px;min-width:0;border:0;border-radius:6px;background:transparent;color:var(--ink);font-size:13px;padding:0 4px;outline:none;cursor:pointer}
+.tools select:hover,.tools select:focus-visible{background:var(--hover)}
 #fFont{flex:1}
 #fSize{width:58px;flex:none}
 .tools button{width:30px;height:30px;flex:none;border-radius:6px;font-size:14px;color:var(--ink);display:grid;place-items:center}
@@ -128,7 +129,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .pnote .led{display:inline-block;margin-right:7px;vertical-align:1px}
 
 /* ---------- Popovers from menu bar ---------- */
-.pop{position:fixed;top:56px;right:20px;z-index:11;width:300px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.14);display:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.pop{max-height:calc(100vh - 76px);overflow-y:auto;position:fixed;top:56px;right:20px;z-index:11;width:300px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.14);display:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .pop h3{font-size:13px;font-weight:600;color:var(--muted);margin:6px 10px 6px}
 .net .mi .bars{display:inline-flex;gap:2px;align-items:flex-end}
 .net .mi .bars i{width:3px;background:currentColor;border-radius:1px}
@@ -150,14 +151,46 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .kv{display:flex;justify-content:space-between;padding:9px 10px;font-size:14px}
 .kv span:last-child{color:var(--muted);font:13px var(--mono)}
 .kv{align-items:center}
-.kv input[type=text]{width:150px;text-align:right;border:0;border-bottom:1px solid var(--line);background:transparent;font:13px var(--mono);color:var(--ink);outline:none;padding:2px 0}
-.kv input[type=text]:focus{border-color:var(--ink)}
+.kv input[type=text]{width:160px;text-align:right;border:0;border-radius:6px;background:transparent;font:13px var(--mono);color:var(--ink);outline:none;padding:5px 7px;margin:-5px -7px -5px 0;transition:background .12s}
+.kv input[type=text]::placeholder{color:var(--muted)}
+.kv input[type=text]:hover,.kv input[type=text]:focus{background:var(--hover)}
+/* Settings: each group of rows is a titled box, with hairlines between its rows */
+#gearPop{width:320px}
+#gearMain h3{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;margin:14px 10px 6px}
+#gearMain h3:first-child{margin-top:6px}
+.grp{background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.grp .kv{padding:10px 12px}
+.grp .kv:not([hidden])~.kv{border-top:1px solid var(--line)}
+.grp button.kv{border-radius:0}
+.kv span.go{font:15px var(--sans);color:var(--muted)}
 label.kv{cursor:pointer}
 /* On/off switch */
 .sw{appearance:none;-webkit-appearance:none;width:30px;height:18px;border-radius:9px;background:var(--line);position:relative;cursor:pointer;transition:.15s;margin:0;flex:none}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.15s}
 .sw:checked{background:var(--ok)} .sw:checked::after{left:14px}
 .note{display:flex;align-items:center;gap:8px;padding:9px 10px;font-size:14px;color:var(--muted)}
+.kv[hidden]{display:none}
+/* A settings row you can press (Check for updates, Install from file) */
+button.kv{width:100%;border-radius:8px;text-align:left}
+button.kv:hover{background:var(--hover)}
+/* Sheet: a firmware update takes over the Settings popover */
+.sheet{display:none;padding:18px 10px 10px;text-align:center}
+.sheet .c{width:36px;height:36px;border-radius:50%;background:var(--hover);color:var(--ink);display:grid;place-items:center;margin:0 auto 10px}
+.sheet .c.ok{background:var(--ok);color:#fff}
+.sheet .c.bad{background:var(--bad);color:#fff}
+.sheet b{display:block;font-size:15px}
+.sheet p{margin:4px 6px 0;min-height:36px;font-size:13px;line-height:1.4;color:var(--muted)}
+.sheet .link{display:block;margin:10px auto 0;color:var(--muted);font-size:13px}
+.sheet .link:hover{color:var(--ink)}
+.sheet .btn{display:block;width:calc(100% - 20px);height:36px;margin:16px auto 0;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600}
+/* Upload progress */
+.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px 10px 10px}
+.bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
+/* The right-hand side of the "Check for updates" row: a short note in words, not in the code font */
+.kv span.say{display:inline-flex;align-items:center;gap:7px;font:13px var(--sans);color:var(--muted)}
+/* A green dot on the gear while newer firmware is waiting */
+#gearBtn{position:relative}
+#gearBtn.new::after{content:"";position:absolute;top:4px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--bg)}
 .ok-state .link+.link{margin-top:6px}
 
 .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
@@ -208,22 +241,44 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
 
 <!-- Settings popover -->
 <div class="pop" id="gearPop">
-  <div class="kv"><span>Name</span><span id="setName">tikprint.local</span></div>
-  <div class="kv"><span>USB-C</span><span id="setUsb">192.168.7.1</span></div>
-  <div class="kv"><span>PIN</span><span>Off</span></div>
-  <div class="kv"><span>Clock</span><span id="setClock"></span></div>
-  <div class="kv"><span>Firmware</span><span id="setFw"></span></div>
-  <h3>Ticket header</h3>
-  <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Location"></div>
-  <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
-  <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
-  <label class="kv"><span>Show time</span><input type="checkbox" class="sw" id="swTime"></label>
+  <div id="gearMain">
+    <h3>Printer</h3>
+    <div class="grp">
+      <div class="kv"><span>Name</span><span id="setName">tikprint.local</span></div>
+      <div class="kv"><span>USB-C</span><span id="setUsb">192.168.7.1</span></div>
+      <div class="kv"><span>Clock</span><span id="setClock"></span></div>
+    </div>
+    <h3>Ticket header</h3>
+    <div class="grp">
+      <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Location"></div>
+      <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
+      <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
+      <label class="kv"><span>Show time</span><input type="checkbox" class="sw" id="swTime"></label>
+    </div>
+    <h3>Firmware</h3>
+    <div class="grp">
+      <div class="kv"><span>Version</span><span id="setFw"></span></div>
+      <button class="kv" id="fwCheck"><span id="fwCheckLabel">Check for updates</span><span class="say" id="fwCheckNote"></span></button>
+      <button class="kv" id="fwBtn" hidden><span>Install from file</span><span class="go">›</span></button>
+    </div>
+    <input type="file" id="fwFile" accept=".bin,application/octet-stream" hidden>
+  </div>
+  <!-- An update's question and progress are shown here, in place of the list above -->
+  <div class="sheet" id="sheet" aria-live="polite">
+    <div class="c" id="shIco"></div>
+    <b id="shTitle"></b>
+    <p id="shText"></p>
+    <div class="bar" id="shBar"><i></i></div>
+    <button class="btn" id="shGo"></button>
+    <button class="link" id="shCancel"></button>
+  </div>
 </div>
 
 <main>
   <!-- Formatting toolbar: works on the selected text, like a word processor -->
   <div class="tools" id="tools">
     <select id="fFont" aria-label="Font"></select>
+    <span class="sep"></span>
     <select id="fSize" aria-label="Size in points"></select>
     <span class="sep"></span>
     <button data-cmd="bold" aria-label="Bold" title="Bold"><b>B</b></button>
@@ -499,7 +554,7 @@ function showPrinter(p,q){
 }
 
 /* ---------- Status (menu bar, ticket number, settings) ---------- */
-let viaUsb=false, scanning=false, printing=false;
+let viaUsb=false, scanning=false, printing=false, updating=false;   // updating: a firmware update is under way
 function applyStatus(s){
   viaUsb=s.via==='usb';
   $('usbLed').classList.toggle('off',!viaUsb);
@@ -509,7 +564,8 @@ function applyStatus(s){
   $('wifiLabel').textContent=s.wifi?'Wi-Fi':(s.wifi_connecting?'Connecting…':'Set up Wi-Fi');
   $('wifiBtn').title=s.wifi?`${s.wifi.ssid} · ${s.wifi.ip}`:'';
   ticket=s.ticket_count+1; showDate();
-  $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip; $('setFw').textContent='v'+s.version;
+  $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip;
+  if(s.update)showFirmware(s); else $('setFw').textContent='v'+s.version;
   $('okHost').textContent=s.hostname;
   // The board forgets the time when it loses power: give it back as soon as it says so (also the very first time).
   if(s.settings)applySettings(s.settings);
@@ -543,7 +599,7 @@ async function ping(){
 }
 let beats=0;
 (async function beat(){
-  if(!joining&&!scanning&&!printing){
+  if(!joining&&!scanning&&!printing&&!updating){   // these keep the board busy: silence then is not "disconnected"
     const r=await ping();
     if(r==='ok'){
       misses=0;
@@ -558,14 +614,162 @@ addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{p
 
 /* popovers + dropdown */
 function closeAll(except){
+  if(updating)except='gearPop';     // a firmware update is running: its progress stays on screen
+  if(except!=='gearPop')closeSheet();
   ['wifiPop','gearPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
   if(except!=='conn')$('conn').classList.remove('open');
   $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop');
 }
-$('wifiBtn').onclick=e=>{e.stopPropagation();const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
-$('gearBtn').onclick=e=>{e.stopPropagation();const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
+$('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
+$('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
 $('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);$('conn').classList.toggle('open',o)};
 document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(null)});
+
+/* ---------- Firmware update ---------- */
+/* Settings > Firmware:
+   - "Check for updates": the board asks GitHub for the latest release of the firmware. If it is newer than
+     what is running, the row turns into "Update to v0.3.0" and the gear gets a green dot. Installing it is one
+     click: the board downloads the file from GitHub itself, checks it and restarts into it. This page shows
+     the download, waits for the board to come back, then reloads itself so you get the new page too.
+     The board also checks by itself once a day, so the dot can appear without anyone asking.
+   - "Install from file" (only shown over the USB cable) sends a firmware file from this computer instead,
+     for trying a build that is not a release yet. Over Wi-Fi the board accepts nothing but a GitHub release.
+   The question and the progress are shown as a "sheet" that takes over the Settings popover. */
+const UPDATE_UPLOAD_MS=180000;  // give up on a file upload after this long
+const UPDATE_BACK_MS=60000;     // how long to wait for the board to come back after an update
+const UPDATE_POLL_MS=700;       // how often to ask the board how a check or a download is going
+const SVG=d=>`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const SHEET_ICONS={
+  up:SVG('<path d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/>'),
+  ok:SVG('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  bad:SVG('<path d="M12 7v6M12 17h.01"/>'),
+  wait:'<span class="spin"></span>',
+};
+const sleep=ms=>new Promise(f=>setTimeout(f,ms));
+let fw={id:'',slot:'',ver:'',max:4194304,boot:0,up:null}, checking=false, checkFailed=false;
+
+/* From /api/status: which firmware is running ("id" is different for every build),
+   and what the board knows about a newer one on GitHub. */
+function showFirmware(s){
+  const u=s.update;
+  fw={id:u.id,slot:u.slot,ver:s.version,max:u.max_bytes||fw.max,boot:s.boot_id,up:u};
+  $('setFw').textContent=`v${s.version} · ${u.id.slice(0,7)}`;
+  $('setFw').title=`Running from "${u.slot}"`;
+  $('fwBtn').hidden=!viaUsb;
+  $('gearBtn').classList.toggle('new',!!u.available);
+  const busy=u.state==='downloading'||u.state==='restarting';
+  $('fwCheckLabel').textContent=busy?`Installing v${u.latest}`:u.available?`Update to v${u.latest}`:'Check for updates';
+  $('fwCheckNote').innerHTML=
+    checking||u.state==='checking'?'<span class="spin"></span>':
+    busy?`${u.progress}%`:
+    u.available?'<span class="led"></span>New':
+    checkFailed?'Couldn’t check':
+    u.checked_s_ago!=null?'Up to date':'<span class="go">›</span>';
+}
+
+/* The sheet. o = {icon, tone:'ok'|'bad', title, text, bar:true, go:'Install', cancel:'Not now'} */
+function showSheet(o){
+  $('gearMain').style.display='none'; $('sheet').style.display='block';
+  $('shIco').className='c'+(o.tone?' '+o.tone:''); $('shIco').innerHTML=SHEET_ICONS[o.icon];
+  $('shTitle').textContent=o.title; $('shText').textContent=o.text||'';
+  $('shBar').style.display=o.bar?'':'none'; $('shBar').firstElementChild.style.width='0';
+  $('shGo').style.display=o.go?'':'none'; $('shGo').textContent=o.go||''; $('shGo').onclick=null;
+  $('shCancel').style.display=o.cancel?'':'none'; $('shCancel').textContent=o.cancel||''; $('shCancel').onclick=closeSheet;
+}
+function closeSheet(){$('sheet').style.display='none'; $('gearMain').style.display=''}
+function sheetProblem(title,text){showSheet({icon:'bad',tone:'bad',title,text,cancel:'Close'})}
+function sheetProgress(percent,text){$('shBar').firstElementChild.style.width=percent+'%'; $('shText').textContent=text}
+
+/* The new firmware is in place and the board is restarting (or about to). Wait for it to come back,
+   say how it went, and reload. was = the firmware that was running before. */
+async function finishUpdate(was){
+  showSheet({icon:'wait',title:'Restarting',text:'The printer is starting the new firmware. This takes a few seconds.'});
+  const start=Date.now(); let s=null;
+  while(!s&&Date.now()-start<UPDATE_BACK_MS){
+    await sleep(800);
+    // "boot_id" is a new number after every restart
+    try{const now=await api('/api/status',undefined,1500); if(now.update&&now.boot_id!==was.boot)s=now}catch(e){}
+  }
+  updating=false;
+  if(!s)return sheetProblem('The printer hasn’t come back','Check that it has power and is on the network. If it stays away, flash it once with the USB cable.');
+  applyStatus(s);
+  // New firmware always runs from a different slot. Same slot as before = the board gave up on it and went back.
+  if(s.update.slot===was.slot)return sheetProblem('Update undone','The new firmware didn’t start properly, so the printer went back to the one it had.');
+  showSheet({icon:'ok',tone:'ok',title:'Updated',text:`Now running v${s.version}`});
+  await sleep(1800); location.reload();   // the page itself is part of the firmware
+}
+
+/* --- From GitHub --- */
+$('fwCheck').onclick=async()=>{
+  const u=fw.up; if(!u||checking||u.state!=='idle')return;
+  if(u.available)return askInstall();
+  checking=true; checkFailed=false; $('fwCheckNote').innerHTML='<span class="spin"></span>';
+  let r=null, s=null;
+  try{r=await api('/api/update/check',{})}catch(e){}
+  if(r&&r.ok){do{await sleep(UPDATE_POLL_MS); s=await refreshStatus()}while(s&&s.update.state==='checking')}
+  checking=false;
+  const now=s&&s.update, problem=!r?'Can’t reach the printer':!r.ok?r.message:!s?'Can’t reach the printer':now.error;
+  checkFailed=!!problem;
+  if(s)showFirmware(s); else $('fwCheckNote').textContent='Couldn’t check';
+  if(problem)toast(problem);
+  else if(now.available)askInstall();
+  else toast(`v${s.version} is the latest`);
+};
+function askInstall(){
+  const v=fw.up.latest;
+  showSheet({icon:'up',title:`Update to v${v}?`,text:`This printer runs v${fw.ver}. It downloads the new firmware from GitHub and restarts, which takes about a minute.`,go:'Install',cancel:'Not now'});
+  $('shGo').onclick=()=>installFromGithub(v);
+}
+async function installFromGithub(v){
+  const was={...fw};
+  let r=null; try{r=await api('/api/update/install',{})}catch(e){}
+  if(!r||!r.ok)return sheetProblem('Couldn’t start the update',r?r.message:'Can’t reach the printer.');
+  updating=true;   // from here the sheet stays up, and silence from the board means "restarting", not "disconnected"
+  showSheet({icon:'up',title:`Installing v${v}`,text:'Downloading from GitHub…',bar:true});
+  for(let silent=0;silent<5;){
+    await sleep(UPDATE_POLL_MS);
+    let s=null; try{s=await api('/api/status',undefined,2000)}catch(e){}
+    if(!s){silent++;continue}
+    silent=0;
+    const u=s.update;
+    if(s.boot_id!==was.boot||u.state==='restarting')break;
+    if(u.state==='downloading')sheetProgress(u.progress,`Downloading from GitHub… ${u.progress}%`);
+    else{updating=false; applyStatus(s); return sheetProblem('Update failed',u.error||'The download didn’t finish. Nothing was changed.')}
+  }
+  sheetProgress(100,'Checking the new firmware…');
+  finishUpdate(was);
+}
+
+/* --- From a file, over the USB cable --- */
+/* XMLHttpRequest rather than fetch, because it reports how much has been sent. */
+function uploadFirmware(file,onProgress){
+  return new Promise(done=>{
+    const x=new XMLHttpRequest(), lost=()=>done({ok:false,message:'Lost contact with the printer during the upload. Nothing was changed.'});
+    x.open('POST','/api/update'); x.timeout=UPDATE_UPLOAD_MS;
+    x.setRequestHeader('Content-Type','application/octet-stream');
+    x.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded/e.total)};
+    x.onload=()=>{try{done(JSON.parse(x.responseText))}catch(e){lost()}};
+    x.onerror=x.ontimeout=x.onabort=lost;
+    x.send(file);
+  });
+}
+async function installFromFile(file){
+  updating=true;   // the board answers nothing else while it takes the file, so the heartbeat pauses
+  const was={...fw}, size=(file.size/1048576).toFixed(1)+' MB';
+  showSheet({icon:'up',title:'Installing from file',text:`${file.name} · ${size}`,bar:true});
+  const r=await uploadFirmware(file,p=>sheetProgress((p*100).toFixed(1),p<1?`${file.name} · ${Math.round(p*100)}% of ${size}`:'Checking the new firmware…'));
+  if(!r.ok){updating=false; sheetProblem('Update failed',r.message||'The printer refused the file.'); refreshStatus(); return}
+  finishUpdate(was);
+}
+$('fwBtn').onclick=()=>$('fwFile').click();
+$('fwFile').onchange=async e=>{
+  const file=e.target.files[0]; e.target.value='';
+  if(!file||updating)return;
+  // Every ESP32 program file starts with the byte E9. The board checks the rest.
+  const first=new Uint8Array(await file.slice(0,1).arrayBuffer())[0];
+  if(first!==0xE9||file.size>fw.max){toast('That isn’t a TikPrint firmware file');return}
+  installFromFile(file);
+};
 
 /* ---------- Wi-Fi ---------- */
 let NETS=[];
