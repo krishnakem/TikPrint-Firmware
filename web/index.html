@@ -11,6 +11,7 @@
   --card:#f4f3f0; --hover:rgba(28,28,30,.05);
   --btn:#1c1c1e; --btn-ink:#fff; --ok:#2e9d5b;
   --paper:#fff; --paper-ink:#111;
+  --col:440px;   /* width of the centre column: toolbar, ticket, drop box, buttons */
   --mono:ui-monospace,"SF Mono",Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
 }
@@ -39,18 +40,44 @@ button{cursor:pointer;background:none;border:0;padding:0}
 main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;padding:96px 20px 80px}
 
 /* the ticket you type on */
-.paper{width:340px;background:var(--paper);color:var(--paper-ink);padding:18px 18px 26px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .8s cubic-bezier(.5,0,.3,1),opacity .35s}
+.paper{width:var(--col);background:var(--paper);color:var(--paper-ink);padding:22px 22px 30px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .3s}
 .paper::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:8px;background:linear-gradient(135deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x,linear-gradient(225deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x}
-.paper.out{transform:translateY(-40px);opacity:0}
+/* Printing: the ticket flies up and off the top of the screen (--away is set to the distance when Print is pressed). */
+@keyframes fly{to{transform:translateY(var(--away))}}
+.paper.out{animation:fly var(--feed,.8s) cubic-bezier(.55,0,.7,.4) forwards}
+.paper.back{animation:fly .4s cubic-bezier(.2,.8,.2,1) reverse}   /* printing failed: the same ticket drops back in */
+/* Then a fresh ticket rises out of the top edge of the "Drop JPG, PNG, or PDF" box below it.
+   It starts shifted down by its own height and is cut off at the box's top edge (22px under the ticket's
+   resting place = the box's margin), so it appears to grow up out of that line. */
+@keyframes rollout{
+  from{transform:translateY(calc(100% + 22px));clip-path:inset(-60px -60px 100% -60px);opacity:0}
+  15%{opacity:1}
+  to{transform:translateY(0);clip-path:inset(-60px -60px -22px -60px);opacity:1}
+}
+.paper.in{animation:rollout .55s cubic-bezier(.2,.75,.25,1)}
+@media (prefers-reduced-motion:reduce){.paper.out,.paper.back,.paper.in{animation-duration:.01s}}
 .p-head{display:flex;justify-content:space-between;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
-.paper textarea{display:block;width:100%;border:0;outline:none;resize:none;background:none;padding:0;color:inherit;font-family:inherit;overflow:hidden}
-#tTitle{font-weight:700;font-size:22px;line-height:1.2;margin-top:14px}
-#tBody{font-size:15px;line-height:1.4;margin-top:6px;min-height:66px}
-.paper textarea::placeholder{color:#bbb}
+/* The text you type. #doc is laid out at the paper's real size (576 px = 576 printer dots) and
+   shrunk to fit the ticket on screen, so lines break exactly where they will on paper. */
+/* overflow:clip, not hidden: a "hidden" box can still scroll inside itself, which pushed the first line out of view */
+.docwrap{margin-top:14px;overflow:clip;cursor:text}
+#doc{width:576px;min-height:150px;transform-origin:0 0;outline:none;font:400 28px/1.35 "Inter",Helvetica,Arial,sans-serif;white-space:pre-wrap;overflow-wrap:break-word}
+/* faded hint on an empty Title / body line. It sits inside the line, so it follows that line's font and size. */
+#doc>.blank::before{content:attr(data-ph);color:#bbb;position:absolute;pointer-events:none}
+
+/* formatting toolbar */
+.tools{width:var(--col);margin-bottom:12px;display:flex;align-items:center;gap:4px;padding:5px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
+.tools select{height:30px;min-width:0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);font-size:13px;padding:0 2px}
+#fFont{flex:1}
+#fSize{width:58px;flex:none}
+.tools button{width:30px;height:30px;flex:none;border-radius:6px;font-size:14px;color:var(--ink);display:grid;place-items:center}
+.tools button:hover{background:var(--hover)}
+.tools button.on{background:var(--btn);color:var(--btn-ink)}
+.tools .sep{width:1px;height:18px;flex:none;background:var(--line);margin:0 2px}
 .p-img{position:relative;margin-top:10px;display:none}
 .p-img.on{display:block}
-/* 288px = half of the printer's 576 dots, so on a 2x screen one printer dot is exactly one screen pixel */
-.p-img canvas{display:block;width:288px;max-width:100%;margin:0 auto}
+/* same width as the text above it: both are 576 printer dots wide */
+.p-img canvas{display:block;width:100%}
 .p-img .p-wait{display:none;padding:26px 0;text-align:center;font:600 12px Helvetica,Arial,sans-serif;color:#999}
 .p-img.busy canvas,.p-img.busy .p-note,.p-img.busy .p-nav{display:none}
 .p-img.turning canvas{opacity:.3}
@@ -67,12 +94,12 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .p-src button{color:#999;font:inherit}
 
 /* upload area */
-.drop{width:340px;margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
+.drop{width:var(--col);margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
 .drop:hover,.drop.over{border-color:var(--ink);color:var(--ink)}
 .drop input{display:none}
 
 /* action row */
-.row{width:340px;margin-top:12px;display:flex;align-items:center;gap:8px}
+.row{width:var(--col);margin-top:12px;display:flex;align-items:center;gap:8px}
 .dd{position:relative}
 .ddbtn{height:40px;padding:0 12px 0 14px;border:1px solid var(--line);border-radius:10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;background:var(--bg)}
 .ddbtn:hover,.dd.open .ddbtn{border-color:var(--ink)}
@@ -85,7 +112,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
 .mi .r.ok{color:var(--ok)}
 .sep{height:1px;background:var(--line);margin:5px 4px}
-.print{margin-left:auto;height:40px;padding:0 20px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.print{margin-left:auto;height:40px;padding:0 18px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
 .print:disabled{opacity:.4;cursor:default}
 
 /* ---------- Popovers from menu bar ---------- */
@@ -125,7 +152,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 body.offline #offline{display:flex}
 body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .toast{display:none!important}
 
-@media (max-width:420px){ .paper,.drop,.row{width:100%} .menubar .mitem .t{display:none} }
+@media (max-width:500px){ .paper,.drop,.row,.tools{width:100%} .menubar .mitem .t{display:none} }
 </style>
 </head>
 <body>
@@ -167,11 +194,24 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
 </div>
 
 <main>
+  <!-- Formatting toolbar: works on the selected text, like a word processor -->
+  <div class="tools" id="tools">
+    <select id="fFont" aria-label="Font"></select>
+    <select id="fSize" aria-label="Size in points"></select>
+    <span class="sep"></span>
+    <button data-cmd="bold" aria-label="Bold" title="Bold"><b>B</b></button>
+    <button data-cmd="italic" aria-label="Italic" title="Italic"><i style="font-family:Georgia,serif">I</i></button>
+    <button data-cmd="underline" aria-label="Underline" title="Underline"><u>U</u></button>
+    <span class="sep"></span>
+    <button data-cmd="justifyLeft" aria-label="Align left" title="Align left"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 3h12M2 6.5h7M2 10h12M2 13.5h7"/></svg></button>
+    <button data-cmd="justifyCenter" aria-label="Centre" title="Centre"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 3h12M4.5 6.5h7M2 10h12M4.5 13.5h7"/></svg></button>
+    <button data-cmd="justifyRight" aria-label="Align right" title="Align right"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 3h12M7 6.5h7M2 10h12M7 13.5h7"/></svg></button>
+  </div>
+
   <!-- The ticket is the editor -->
   <div class="paper" id="paper">
     <div class="p-head"><span>TIKPRINT</span><span id="date"></span></div>
-    <textarea id="tTitle" rows="1" placeholder="Title"></textarea>
-    <textarea id="tBody" rows="3" placeholder="Write something…"></textarea>
+    <div class="docwrap" id="docWrap"><div id="doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Ticket text"></div></div>
     <div class="p-img" id="pImg"><canvas id="prev" width="576" height="1" role="img" aria-label="Exactly what will print"></canvas><div class="p-wait" id="pWait">Preparing…</div><div class="p-nav" id="pNav"><button id="pPrev" aria-label="Previous part">‹</button><span id="pPart"></span><button id="pNext" aria-label="Next part">›</button></div><div class="p-note" id="pNote"></div><button id="rmImg" aria-label="Remove file">✕</button></div>
     <div class="p-src" id="pSrc"><span id="srcName"></span><button id="rmSrc">clear</button></div>
   </div>
@@ -221,7 +261,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
   const c=document.getElementById('grid'), g=c.getContext('2d');
   const m={x:-9999,y:-9999,sx:-9999,sy:-9999,active:0};
   let base=[0,0,0],hot=[0,0,0],W=0,H=0,dpr=1; const SP=16,R=150;
-  const SOLID='.paper,.drop,.ddbtn,.print,.pop.open,.dd.open .menu,.toast.on,body.offline #offline .card';
+  const SOLID='.tools,.paper,.drop,.ddbtn,.print,.pop.open,.dd.open .menu,.toast.on,body.offline #offline .card';
   const hex=v=>{v=v.trim().replace('#','');return[0,2,4].map(i=>parseInt(v.slice(i,i+2),16))};
   const colors=()=>{const s=getComputedStyle(document.documentElement);base=hex(s.getPropertyValue('--dot'));hot=hex(s.getPropertyValue('--dot-hot'))};
   const size=()=>{dpr=Math.min(devicePixelRatio,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr};
@@ -230,7 +270,8 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     m.sx+=(m.x-m.sx)*.18;m.sy+=(m.y-m.sy)*.18;
     const ox=(W%SP)/2,oy=(H%SP)/2;
     // objects the dots stop at (with a small gap so they end cleanly at the edge)
-    const GAP=5, rects=[...document.querySelectorAll(SOLID)].filter(el=>el.offsetParent||getComputedStyle(el).position==='fixed').map(el=>{const r=el.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:r.bottom+(el.id==='paper'?8:0),width:r.width,height:r.height}}).filter(r=>r.width&&r.height);
+    // slot = the line a fresh ticket rises out of (top of the drop box); while it does, the part still below that line is hidden
+    const GAP=5, slot=document.getElementById('drop').getBoundingClientRect().top, rects=[...document.querySelectorAll(SOLID)].filter(el=>el.offsetParent||getComputedStyle(el).position==='fixed').map(el=>{const r=el.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:el.id==='paper'?(el.classList.contains('in')?Math.min(r.bottom,slot):r.bottom+8):r.bottom,width:r.width,height:r.height}}).filter(r=>r.width&&r.height&&r.bottom>r.top);
     const blocked=(px,py)=>rects.some(r=>px>r.left-GAP&&px<r.right+GAP&&py>r.top-GAP&&py<r.bottom+GAP);
     for(let y=oy;y<H+SP;y+=SP)for(let x=ox;x<W+SP;x+=SP){
       const dx=x-m.sx,dy=y-m.sy,d=Math.hypot(dx,dy);
@@ -317,11 +358,6 @@ let beats=0;
 
 /* menu bar goes frosted only once you scroll */
 addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{passive:true});
-
-/* auto-grow textareas */
-function grow(t){t.style.height='auto';t.style.height=t.scrollHeight+'px'}
-['tTitle','tBody'].forEach(id=>{$(id).addEventListener('input',e=>grow(e.target));grow($(id))});
-$('tTitle').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.metaKey&&!e.ctrlKey){e.preventDefault();$('tBody').focus()}});
 
 /* popovers + dropdown */
 function closeAll(except){
@@ -632,35 +668,220 @@ const FILL={
 };
 document.querySelector('#conn .menu').addEventListener('click',e=>{
   const b=e.target.closest('.mi'); if(!b)return; const c=b.dataset.c; closeAll(null);
-  if(FILL[c]){const f=FILL[c];$('tTitle').value=f.title;$('tBody').value=f.body;grow($('tTitle'));grow($('tBody'));$('srcName').textContent=f.src;$('pSrc').classList.add('on')}
+  if(FILL[c]){const f=FILL[c];setDoc(titleLine(esc(f.title))+f.body.split('\n').map(l=>`<div>${esc(l)||'<br>'}</div>`).join(''));$('srcName').textContent=f.src;$('pSrc').classList.add('on')}
   else toast(c==='add'?'Paste an API token to add a connector':'Paste your token in Settings to connect');
 });
-$('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');$('tTitle').value='';$('tBody').value='';grow($('tTitle'));grow($('tBody'))};
+$('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
+
+/* ---------- Editor ---------- */
+/* The printer's built-in font can't be changed, so the page draws the text itself, as dots.
+   The ticket is a small word processor: select text, then pick a font, size or style.
+   The font files live on the board (web/fonts), so this works with no internet.
+   To add a font: see the note in main/CMakeLists.txt. */
+const FONTS=[
+  // name shown in the toolbar, file in web/fonts, weights the file holds
+  {name:'Inter',          file:'inter',          weight:'100 900'},
+  {name:'Source Serif',   file:'source-serif',   weight:'200 900'},
+  {name:'Nunito',         file:'nunito',         weight:'200 1000'},
+  {name:'Caveat',         file:'caveat',         weight:'400 700'},
+  {name:'JetBrains Mono', file:'jetbrains-mono', weight:'100 800'},
+];
+const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, true to size on paper
+const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
+const TITLE_PX=Math.round(16*DOTS_PER_PT);         // heading size used when a connector fills the ticket
+const HEAD_SIZE=20;     // the "#0042  TODOIST · TODAY" line, in dots
+const TEXT_CUT=140;     // text is drawn in greys; darker than this (0-255) becomes a black dot. Higher = bolder
+const TEXT_MAXH=4096;   // most rows of text on one ticket (about 51 cm)
+const doc=$('doc');
+/* A new ticket starts with a big bold Title line and a normal body line, each with a faded hint. */
+const TITLE_HINT='Title';
+const titleLine=html=>`<div data-ph="${TITLE_HINT}" style="font-size:${TITLE_PX}px;font-weight:700">${html||'<br>'}</div>`;
+const TEMPLATE=titleLine('')+'<div data-ph="Write something…"><br></div>';
+let fontsOk=false;      // all font files have arrived from the board
+Promise.all(FONTS.map(f=>{const face=new FontFace(f.name,`url(/fonts/${f.file}.woff2)`,{weight:f.weight});document.fonts.add(face);return face.load()}))
+  .then(()=>{fontsOk=true},e=>{console.error(e);toast('Couldn’t load the fonts')});
+
+/* Shrink the paper-sized text to the width of the ticket on screen. */
+function fit(){
+  const k=$('docWrap').clientWidth/PW; if(!k)return;
+  doc.style.transform=`scale(${k})`; $('docWrap').style.height=doc.offsetHeight*k+'px';
+}
+new ResizeObserver(fit).observe(doc); addEventListener('resize',fit); fit();
+
+/* Clicking a toolbar menu takes the cursor out of the text, so remember where it was. */
+let savedSel=null, sizePx=Math.round(10*DOTS_PER_PT), sizeHold=null;
+document.addEventListener('selectionchange',()=>{
+  const sel=getSelection();
+  if(sel.rangeCount&&doc.contains(sel.anchorNode)){savedSel=sel.getRangeAt(0).cloneRange();showState()}
+});
+/* Clean up after the browser's editing commands. */
+function tidy(){
+  // The browser can only set 7 fixed sizes, as <font size>. Turn those into the real size picked.
+  doc.querySelectorAll('font[size]').forEach(el=>{
+    el.removeAttribute('size'); el.style.fontSize=sizePx+'px';
+    el.querySelectorAll('[style]').forEach(d=>{d.style.fontSize=''});
+  });
+  // Everything was deleted: start again from the Title + body layout.
+  if(!doc.textContent&&(doc.children.length<2||!doc.firstElementChild.dataset.ph)){
+    doc.innerHTML=TEMPLATE; if(document.activeElement===doc)caretTo(doc.firstElementChild);
+  }
+  // Hints. Pressing Enter copies a line, hint included, so only the first line with each hint keeps it.
+  const seen=new Set(), few=doc.children.length<=2;
+  for(const b of doc.children){
+    const ph=b.dataset.ph;
+    if(ph&&seen.has(ph))delete b.dataset.ph; else if(ph)seen.add(ph);
+    b.classList.toggle('blank',!!b.dataset.ph&&!b.textContent&&(b.dataset.ph===TITLE_HINT||few));
+  }
+}
+doc.addEventListener('input',tidy);
+/* Enter in the Title line goes to the body, instead of making a second big bold line. */
+doc.addEventListener('keydown',e=>{
+  if(e.key!=='Enter'||e.shiftKey||e.metaKey||e.ctrlKey||e.isComposing)return;
+  const sel=getSelection(), b=lineAt(sel.anchorNode,sel.anchorOffset); if(!b||b.dataset.ph!==TITLE_HINT)return;
+  e.preventDefault();
+  if(!b.nextElementSibling||b.nextElementSibling.textContent)b.insertAdjacentHTML('afterend','<div><br></div>');
+  caretTo(b.nextElementSibling); tidy();
+});
+/* Pasted text comes in plain, so it takes the style at the cursor rather than the web page's. */
+doc.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'))});
+function setDoc(html){doc.innerHTML=html||TEMPLATE;savedSel=null;tidy()}
+/* The line (direct child of the text box) that a node is in. */
+function lineAt(node,offset=0){
+  if(node===doc)node=doc.childNodes[Math.min(offset,doc.childNodes.length-1)];
+  while(node&&node.parentNode!==doc)node=node.parentNode;
+  return node&&node.nodeType===1?node:null;
+}
+function caretTo(el){
+  const r=document.createRange(); r.setStart(el,0); r.collapse(true);
+  const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); savedSel=r.cloneRange();
+}
+/* Run one formatting command on the selected text (or on what is typed next). */
+function format(cmd,val){
+  // Use the selection in the text. If a toolbar menu took the cursor away, put it back where it was.
+  const sel=getSelection();
+  if(!(document.activeElement===doc&&sel.rangeCount&&doc.contains(sel.anchorNode))){
+    doc.focus(); if(savedSel){sel.removeAllRanges();sel.addRange(savedSel)}
+  }
+  const at=sel.rangeCount?sel.getRangeAt(0):null;
+  // On an empty line, style the line itself, so its faded hint and whatever is typed there both change.
+  const line=at&&at.collapsed?lineAt(at.startContainer,at.startOffset):null, st=line&&!line.textContent?line.style:null, cs=st&&getComputedStyle(line);
+  if(st&&!cmd.startsWith('justify')){
+    if(cmd==='fontName')st.fontFamily=`"${val}"`;
+    if(cmd==='fontSize')st.fontSize=sizePx+'px';
+    if(cmd==='bold')st.fontWeight=parseInt(cs.fontWeight)>=600?'400':'700';
+    if(cmd==='italic')st.fontStyle=cs.fontStyle==='italic'?'normal':'italic';
+    if(cmd==='underline')st.textDecorationLine=cs.textDecorationLine.includes('underline')?'none':'underline';
+    line.innerHTML='<br>'; caretTo(line);
+  }else{
+    document.execCommand('styleWithCSS',false,cmd!=='fontSize');
+    document.execCommand(cmd,false,val);
+  }
+  tidy(); showState();
+}
+/* Make the toolbar show the style at the cursor. */
+function showState(){
+  const sel=getSelection(); if(!sel.rangeCount||!doc.contains(sel.anchorNode))return;
+  const r=sel.getRangeAt(0), el=sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement, cs=getComputedStyle(el);
+  let fam=''; try{fam=document.queryCommandValue('fontName')}catch(e){}
+  const f=FONTS.find(f=>fam.includes(f.name))||FONTS.find(f=>cs.fontFamily.includes(f.name)); if(f)$('fFont').value=f.name;
+  // a size picked with nothing selected only applies to what is typed next: keep showing it until the cursor moves
+  if(!(sizeHold&&r.collapsed&&r.startContainer===sizeHold.node&&r.startOffset===sizeHold.at)){
+    sizeHold=null; const pt=parseFloat(cs.fontSize)/DOTS_PER_PT;
+    $('fSize').value=SIZES.reduce((a,b)=>Math.abs(b-pt)<Math.abs(a-pt)?b:a);
+  }
+  $('tools').querySelectorAll('button').forEach(b=>{let on=false; try{on=document.queryCommandState(b.dataset.cmd)}catch(e){} b.classList.toggle('on',on)});
+}
+$('fFont').innerHTML=FONTS.map(f=>`<option>${f.name}</option>`).join('');
+$('fSize').innerHTML=SIZES.map(p=>`<option>${p}</option>`).join(''); $('fSize').value=10;
+$('fFont').onchange=e=>format('fontName',e.target.value);
+$('fSize').onchange=e=>{
+  sizePx=Math.round(e.target.value*DOTS_PER_PT);
+  sizeHold=savedSel&&savedSel.collapsed?{node:savedSel.startContainer,at:savedSel.startOffset}:null;
+  format('fontSize',7);
+};
+setDoc('');
+$('tools').addEventListener('mousedown',e=>{if(e.target.closest('button'))e.preventDefault()});   // keep the selection
+$('tools').addEventListener('click',e=>{const b=e.target.closest('button'); if(b)format(b.dataset.cmd)});
+
+/* Turn the ticket's text into dots, PW wide. Returns {height, data} like rasterize(), or null if too long.
+   The browser has already laid the text out at paper size, so we ask it where every word sits
+   and draw each word at that spot. What you see is what prints. */
+function docBits(source){
+  const box=doc.getBoundingClientRect(), k=box.width/PW, head=Math.round(HEAD_SIZE*1.4)+14;
+  const measure=mkCanvas(1,1).getContext('2d'), range=document.createRange(), items=[];
+  const walker=document.createTreeWalker(doc,NodeFilter.SHOW_TEXT);
+  for(let n;(n=walker.nextNode());){
+    const el=n.parentElement, cs=getComputedStyle(el), size=parseFloat(cs.fontSize);
+    const font=`${cs.fontStyle} ${cs.fontWeight} ${size}px ${cs.fontFamily}`;
+    measure.font=font; const m=measure.measureText('x'), asc=m.fontBoundingBoxAscent, desc=m.fontBoundingBoxDescent;
+    let under=false; for(let a=el;a&&doc.contains(a);a=a.parentElement)if(getComputedStyle(a).textDecorationLine.includes('underline'))under=true;
+    const piece=(from,to)=>{
+      range.setStart(n,from); range.setEnd(n,to);
+      const rects=[...range.getClientRects()].filter(r=>r.width>0), text=n.data.slice(from,to), blank=!text.trim();
+      if(rects.length>1&&!blank&&to-from>1){   // a word broken over two lines: place it letter by letter
+        for(let i=from;i<to;){const len=n.data.codePointAt(i)>0xFFFF?2:1; piece(i,i+len); i+=len}
+        return;
+      }
+      for(const r of blank?rects:rects.slice(0,1))
+        items.push({text:blank?'':text,font,size,under,x:(r.left-box.left)/k,w:r.width/k,
+                    y:(r.top-box.top)/k,base:(r.top-box.top)/k+(r.height/k-asc-desc)/2+asc,bottom:(r.bottom-box.top)/k});
+    };
+    for(const w of n.data.matchAll(/\s+|\S+/g))piece(w.index,w.index+w[0].length);
+  }
+  // start at the first line that has text (an empty Title line prints no blank gap), end at the last
+  const drawn=items.filter(it=>it.text), up=drawn.length?Math.min(...drawn.map(it=>it.y)):0, top=head-up;
+  const h=Math.ceil(top+drawn.reduce((b,it)=>Math.max(b,it.bottom),up)+8); if(h>TEXT_MAXH)return null;
+  const c=mkCanvas(PW,h), g=c.getContext('2d',{willReadFrequently:true});
+  g.fillStyle='#fff'; g.fillRect(0,0,PW,h); g.fillStyle='#000';
+  g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`; g.fillText(pad(ticket)+(source?'   '+source:''),0,4+HEAD_SIZE);
+  for(const it of items){
+    g.font=it.font; if(it.text)g.fillText(it.text,it.x,top+it.base);
+    if(it.under)g.fillRect(it.x,Math.round(top+it.base+it.size*.1),it.w,Math.max(1,Math.round(it.size/14)));
+  }
+  const v=greys(c), data=new Uint8Array(PW/8*h);
+  for(let i=0;i<PW*h;i++)if(v[i]<TEXT_CUT)data[i>>3]|=0x80>>(i&7);
+  return {height:h,data};
+}
+const docText=()=>doc.innerText.trim();
 
 /* ---------- Print ---------- */
-/* Body sent to the board: 4-byte length + JSON + (optional) raw image bits. See print_post in api.c. */
+/* Body sent to the board: 4-byte length + JSON + (optional) raw image bits. See print_post in api.c.
+   The image is the text (drawn above) followed by the file's dots. The plain words are sent too,
+   for the board's log. If the fonts didn't load, the text is left out of the image and the board
+   prints those plain words in the printer's built-in font instead.
+   Returns null if there is too much text. */
 function printBody(){
-  const meta={title:$('tTitle').value.trim(),body:$('tBody').value.replace(/\s+$/,''),source:$('pSrc').classList.contains('on')?$('srcName').textContent:''};
-  const hasImg=$('pImg').classList.contains('on')&&imgBits;
-  if(hasImg)meta.image={width:PW,height:imgBits.height};
+  const meta={title:'',body:docText().slice(0,3000),source:$('pSrc').classList.contains('on')?$('srcName').textContent:''};
+  const file=$('pImg').classList.contains('on')&&imgBits?imgBits:null;
+  const text=fontsOk?docBits(meta.source):null;
+  if(fontsOk&&!text)return null;
+  const rows=(text?text.height:0)+(file?file.height:0);
+  if(rows)meta.image={width:PW,height:rows};
+  if(text)meta.text_in_image=true;
   const json=new TextEncoder().encode(JSON.stringify(meta));
-  const buf=new Uint8Array(4+json.length+(hasImg?imgBits.data.length:0));
+  const buf=new Uint8Array(4+json.length+rows*PW/8);
   new DataView(buf.buffer).setUint32(0,json.length,true);
-  buf.set(json,4); if(hasImg)buf.set(imgBits.data,4+json.length);
+  buf.set(json,4);
+  if(text)buf.set(text.data,4+json.length);
+  if(file)buf.set(file.data,4+json.length+(text?text.data.length:0));
   return buf;
 }
+const FEED_MS=px=>Math.round(Math.min(1100,Math.max(550,px*1.1)));   // how long the ticket takes to fly off, from the distance in pixels
 async function doPrint(){
   if(printing||offline)return;
-  if(!$('tTitle').value.trim()&&!$('tBody').value.trim()&&!$('pImg').classList.contains('on')){$('tBody').focus();return}
+  if(!docText()&&!$('pImg').classList.contains('on')){doc.focus();return}
   if($('pImg').classList.contains('on')&&!imgBits){toast('Still preparing the file…');return}
-  printing=true; $('printBtn').disabled=true; $('paper').classList.add('out');
+  const body=printBody(); if(!body){toast('Too much text for one ticket');return}
+  printing=true; $('printBtn').disabled=true;
+  const away=$('paper').getBoundingClientRect().bottom+40;   // far enough to clear the top of the screen
+  $('paper').style.setProperty('--away',-away+'px'); $('paper').style.setProperty('--feed',FEED_MS(away)+'ms'); $('paper').classList.add('out');
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),20000);
   let r;
   try{
     // run the request and the "ticket leaves" animation together
     const [res]=await Promise.all([
-      fetch('/api/print',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:printBody(),signal:ctl.signal}).then(x=>x.json()),
-      new Promise(f=>setTimeout(f,800))]);
+      fetch('/api/print',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body,signal:ctl.signal}).then(x=>x.json()),
+      new Promise(f=>setTimeout(f,FEED_MS(away)+60))]);
     r=res;
   }catch(e){r={ok:false,message:'Couldn’t reach the printer'}}
   clearTimeout(timer);
@@ -670,15 +891,16 @@ async function doPrint(){
     const multi=job&&job.parts.length>1, more=multi&&job.cur<job.parts.length-1;
     toast((multi?`Printed part ${job.cur+1} of ${job.parts.length}`:`Printed ${pad(r.number)}`)+(viaUsb?' over USB-C':''));
     ticket=r.ticket_count+1; showDate();
-    $('tTitle').value='';$('tBody').value='';grow($('tTitle'));grow($('tBody'));
+    setDoc('');
     if(more)showPart(job.cur+1); else $('rmImg').click();
     $('pSrc').classList.remove('on');
-    // a fresh ticket slides up into place
-    p.style.transition='none'; p.classList.remove('out'); p.style.transform='translateY(30px)'; p.style.opacity=0;
-    p.offsetHeight; p.style.transition=''; p.style.transform=''; p.style.opacity='';
-    $('tTitle').focus();
+    // a fresh ticket rises out of the drop box
+    p.classList.remove('out'); p.classList.add('in');
+    p.addEventListener('animationend',()=>p.classList.remove('in'),{once:true});
+    doc.focus();
   }else{
-    p.classList.remove('out');   // the same ticket comes back, nothing is lost
+    p.classList.remove('out'); p.classList.add('back');   // the same ticket drops back in, nothing is lost
+    p.addEventListener('animationend',()=>p.classList.remove('back'),{once:true});
     toast(r.message||'Printing failed');
   }
   printing=false; $('printBtn').disabled=false;

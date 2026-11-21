@@ -29,3 +29,10 @@ add_dependencies(${COMPONENT_LIB} web_ui_gz)
 foreach(web_gz ${web_gz_all})
     target_add_binary_data(${COMPONENT_LIB} "${web_gz}" BINARY DEPENDS "${web_gz}")
 endforeach()
+
+# --- Fonts the page draws ticket text with. Embedded as they are (woff2 is already compressed). ---
+# To add one: put the file in web/fonts, add its name here, in FONT_FILES in web_server.c,
+# and in FONTS in web/index.html.
+foreach(f "inter" "source-serif" "jetbrains-mono" "caveat" "nunito")
+    target_add_binary_data(${COMPONENT_LIB} "${web_dir}/fonts/${f}.woff2" BINARY)
+endforeach()

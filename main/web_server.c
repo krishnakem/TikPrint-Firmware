@@ -55,11 +55,47 @@ static esp_err_t pdf_worker_get(httpd_req_t *req)
     return send_script(req, pdf_worker_gz_start, pdf_worker_gz_end);
 }
 
+/*
+ * Fonts: the page draws the ticket's text with these (the board itself never draws text).
+ * The page only downloads the one that is selected.
+ */
+#define FONT(uri_name, symbol) \
+    extern const uint8_t symbol##_start[] asm("_binary_" #symbol "_woff2_start"); \
+    extern const uint8_t symbol##_end[]   asm("_binary_" #symbol "_woff2_end");
+FONT("inter", inter)
+FONT("source-serif", source_serif)
+FONT("jetbrains-mono", jetbrains_mono)
+FONT("caveat", caveat)
+FONT("nunito", nunito)
+#undef FONT
+
+typedef struct {
+    const char *uri;
+    const uint8_t *start, *end;
+} font_file_t;
+
+static const font_file_t FONT_FILES[] = {
+    { "/fonts/inter.woff2",          inter_start,          inter_end },
+    { "/fonts/source-serif.woff2",   source_serif_start,   source_serif_end },
+    { "/fonts/jetbrains-mono.woff2", jetbrains_mono_start, jetbrains_mono_end },
+    { "/fonts/caveat.woff2",         caveat_start,         caveat_end },
+    { "/fonts/nunito.woff2",         nunito_start,         nunito_end },
+};
+
+static esp_err_t font_get(httpd_req_t *req)
+{
+    const font_file_t *f = req->user_ctx;
+    ESP_LOGI(TAG, "GET %s", req->uri);
+    httpd_resp_set_type(req, "font/woff2");
+    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
+    return httpd_resp_send(req, (const char *)f->start, f->end - f->start);
+}
+
 esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;  // browsers open several connections; recycle the oldest
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 32;
     config.stack_size = 8192;        // Wi-Fi scan + JSON building need more than the default
 
     httpd_handle_t server = NULL;
@@ -75,6 +111,11 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(server, &pdf);
     const httpd_uri_t pdf_worker = { .uri = "/vendor/pdf.worker.min.mjs", .method = HTTP_GET, .handler = pdf_worker_get };
     httpd_register_uri_handler(server, &pdf_worker);
+    for (size_t i = 0; i < sizeof(FONT_FILES) / sizeof(FONT_FILES[0]); i++) {
+        const httpd_uri_t font = { .uri = FONT_FILES[i].uri, .method = HTTP_GET, .handler = font_get,
+                                   .user_ctx = (void *)&FONT_FILES[i] };
+        httpd_register_uri_handler(server, &font);
+    }
     api_register(server);
 
     ESP_LOGI(TAG, "HTTP server listening on port %d (UI is %u bytes gzipped)", config.server_port,

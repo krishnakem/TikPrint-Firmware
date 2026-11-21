@@ -97,8 +97,19 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 - The wire is one-way, so the board cannot tell if the printer is off or out of paper.
 - A ticket is sent in the background; a tall image takes a few seconds.
   Pressing Print again before it finishes gives "Still printing the last ticket".
-- Title and body are printed in the printer's built-in font, which only knows
-  plain characters; a few symbols are swapped (☐ becomes `[ ]`), the rest print as `?`.
+- The ticket is a small word processor. Select text, then use the toolbar above it:
+  font, size (in points, true to size on paper), bold, italic, underline, and
+  left / centre / right. One ticket can mix as many fonts and sizes as you like.
+- The browser draws that text as dots, exactly as laid out on screen, and sends it as
+  the top of the image. The printer's own receipt font is not used.
+- The fonts (Inter, Source Serif, Nunito, Caveat, JetBrains Mono; all SIL Open Font
+  License) are in `web/fonts/` and embedded in the firmware, so this works with no internet.
+  Characters a font lacks (☐, emoji, other alphabets) come from the device's own fonts.
+- The size list and how bold the dots come out (`TEXT_CUT`) are named constants at the top of the "Editor" code in `web/index.html`.
+- To add a font: put a `.woff2` in `web/fonts/`, then add its name in three places:
+  the list in `main/CMakeLists.txt`, `FONT_FILES` in `main/web_server.c`, and `FONTS` in `web/index.html`.
+- A ticket sent without the browser (for example with `curl`) still prints in the printer's
+  built-in font, which only knows plain characters (☐ becomes `[ ]`, unknown ones print as `?`).
 - Every ticket is also written to the log with an ASCII-art picture of any image
   (`idf.py -p /dev/cu.usbmodem5B901739161 monitor`), and the last one is remembered.
 - To run with no printer attached, point `s_driver` in `main/printer.c` at `printer_fake_driver`.
@@ -135,6 +146,7 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 | `main/printer_fake.c` | Fake printer: logs tickets and keeps the last one in PSRAM |
 | `main/web_server.c` | HTTP server on port 80; serves the embedded UI |
 | `web/index.html` | The UI. Gzipped and embedded into the firmware at build time |
+| `web/fonts/` | Fonts for ticket text, embedded as they are |
 | `web/vendor/` | pdf.js (library + worker), embedded the same way. To update: replace both files and change `PDFJS` in `web/index.html` |
 | `tools/gzip_file.py` | Build helper that gzips the UI |
 | `sdkconfig.defaults` | Board settings (flash, PSRAM, UART logs, USB mode) |

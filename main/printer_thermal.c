@@ -135,23 +135,27 @@ static void send_job(const printer_job_t *job)
     CMD("\x1B@");        // ESC @: reset the printer to its defaults
     CMD("\x1Bt\x00");    // ESC t 0: code page 437 (matches send_text above)
 
-    snprintf(line, sizeof(line), "#%04u", (unsigned)job->number);
-    send_text(line);
-    if (job->source[0]) {
-        send_text("  ");
-        send_text(job->source);
-    }
-    send_text("\n");
+    // Normally the page has drawn the text into the image, in the font picked there.
+    // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl).
+    if (!job->text_in_image) {
+        snprintf(line, sizeof(line), "#%04u", (unsigned)job->number);
+        send_text(line);
+        if (job->source[0]) {
+            send_text("  ");
+            send_text(job->source);
+        }
+        send_text("\n");
 
-    if (job->title[0]) {
-        CMD("\x1B" "E\x01" "\x1D!\x11");   // bold on, double width + height
-        send_text(job->title);
-        send_text("\n");
-        CMD("\x1D!\x00" "\x1B" "E\x00");   // back to normal
-    }
-    if (job->body[0]) {
-        send_text(job->body);
-        send_text("\n");
+        if (job->title[0]) {
+            CMD("\x1B" "E\x01" "\x1D!\x11");   // bold on, double width + height
+            send_text(job->title);
+            send_text("\n");
+            CMD("\x1D!\x00" "\x1B" "E\x00");   // back to normal
+        }
+        if (job->body[0]) {
+            send_text(job->body);
+            send_text("\n");
+        }
     }
     if (job->image && job->image_rows) {
         send_image(job->image, job->image_rows);

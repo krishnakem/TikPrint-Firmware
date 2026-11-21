@@ -283,8 +283,11 @@ static esp_err_t wifi_forget_post(httpd_req_t *req)
  * Body (application/octet-stream), in this order:
  *   1. 4 bytes: length N of the JSON that follows (little-endian)
  *   2. N bytes: JSON {"title": "...", "body": "...", "source": "...",
- *                     "image": {"width": 576, "height": H}}   (optional)
+ *                     "image": {"width": 576, "height": H},   (optional)
+ *                     "text_in_image": true}                  (optional, see below)
  *   3. if "image" is present: H * 72 bytes of raw image bits.
+ *      "text_in_image" means the page drew the text at the top of the image, in its own
+ *      font. title/body/source are then only kept for the log and /api/last-ticket.
  *      The browser has already turned the picture or PDF into dots, 576 wide and
  *      pure black/white, so the board never has to decode JPG, PNG or PDF.
  */
@@ -349,6 +352,7 @@ static esp_err_t print_post(httpd_req_t *req)
         }
         job.image = buf + 4 + meta_len;
         job.image_rows = h;
+        job.text_in_image = cJSON_IsTrue(cJSON_GetObjectItem(meta, "text_in_image"));
     }
     if (!job.title[0] && !job.body[0] && !job.image) {
         ret = print_fail(req, "empty", "Nothing to print");
