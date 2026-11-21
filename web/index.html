@@ -886,7 +886,8 @@ const FONTS=[
 const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, true to size on paper
 const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
 const TITLE_PX=Math.round(16*DOTS_PER_PT);         // heading size used when a connector fills the ticket
-const HEAD_SIZE=20;     // the "#0042  TODOIST · TODAY" line, in dots
+const HEAD_SIZE=20;     // the "TODOIST · TODAY" line (only on tickets filled by a connector), in dots
+const HDR_PAD=10;       // gap between the header and the text when there is no such line
 const HDR_SIZE=17;      // the "TikPrint | Los Angeles ... NOV 20, 2026 | 10:05 PM PST" line above it, in dots
 const HDR_H=Math.round(HDR_SIZE*1.4)+8;   // room that line takes
 const HDR_GAP=24;       // least space between its left and right halves
@@ -1017,7 +1018,7 @@ function drawHeader(g){
   if(right)g.fillText(right,PW-g.measureText(right).width,2+HDR_SIZE);
 }
 function docBits(source){
-  const box=doc.getBoundingClientRect(), k=box.width/PW, head=HDR_H+Math.round(HEAD_SIZE*1.4)+14;
+  const box=doc.getBoundingClientRect(), k=box.width/PW, head=HDR_H+(source?Math.round(HEAD_SIZE*1.4)+14:HDR_PAD);   // room above the text: header, plus the source line if there is one
   const measure=mkCanvas(1,1).getContext('2d'), range=document.createRange(), items=[];
   const walker=document.createTreeWalker(doc,NodeFilter.SHOW_TEXT);
   for(let n;(n=walker.nextNode());){
@@ -1044,7 +1045,7 @@ function docBits(source){
   const c=mkCanvas(PW,h), g=c.getContext('2d',{willReadFrequently:true});
   g.fillStyle='#fff'; g.fillRect(0,0,PW,h); g.fillStyle='#000';
   g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`; drawHeader(g); g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`;
-  g.fillText(pad(ticket)+(source?'   '+source:''),0,HDR_H+4+HEAD_SIZE);
+  if(source)g.fillText(source,0,HDR_H+4+HEAD_SIZE);   // the ticket number is not printed
   for(const it of items){
     g.font=it.font; if(it.text)g.fillText(it.text,it.x,top+it.base);
     if(it.under)g.fillRect(it.x,Math.round(top+it.base+it.size*.1),it.w,Math.max(1,Math.round(it.size/14)));

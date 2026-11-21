@@ -188,7 +188,8 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
   the part and the whole file will use (8 dots = 1 mm).
 - The numbers that control the look (trim, contrast, sharpening, brightness)
   are named constants at the top of the "Upload area" code in `web/index.html`.
-- The ticket number is stored on the board and survives reboots.
+- The ticket number is stored on the board and survives reboots. It is used in the UI, the log
+  and the API, but is not printed on the ticket.
 
 ## Ticket header
 

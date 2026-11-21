@@ -208,7 +208,6 @@ static void send_header(void)
 
 static void send_job(const printer_job_t *job)
 {
-    char line[32];
     CMD("\x1B@");        // ESC @: reset the printer to its defaults
     CMD("\x1Bt\x00");    // ESC t 0: code page 437 (matches send_text above)
 
@@ -216,13 +215,10 @@ static void send_job(const printer_job_t *job)
     // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl).
     if (!job->text_in_image) {
         send_header();
-        snprintf(line, sizeof(line), "#%04u", (unsigned)job->number);
-        send_text(line);
-        if (job->source[0]) {
-            send_text("  ");
+        if (job->source[0]) {   // the ticket number is not printed
             send_text(job->source);
+            send_text("\n");
         }
-        send_text("\n");
 
         if (job->title[0]) {
             CMD("\x1B" "E\x01" "\x1D!\x11");   // bold on, double width + height
