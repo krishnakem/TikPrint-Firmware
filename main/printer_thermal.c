@@ -9,18 +9,17 @@
  * The printer needs its own power supply; the board cannot power it.
  *
  * Sending a ticket over a serial wire is slow (a tall image can take over a
- * minute), so print() only takes a copy of the job and returns straight away.
- * A background task then feeds the copy to the printer.
+ * minute), and print() only returns when the whole ticket has been sent. That is
+ * fine: it is called by the print queue's background task (print_queue.c), never
+ * by the web server. The queue also makes sure only one thing prints at a time.
  */
 #include <stdio.h>
 #include <string.h>
-#include <stdatomic.h>
 
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #include "printer.h"
 
@@ -36,10 +35,7 @@ static const char *TAG = "thermal_printer";
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
 #define BAND_ROWS 64
 
-static TaskHandle_t s_task;
-static atomic_bool s_busy;
-static const printer_job_t *s_job;   // the copy kept by the fake driver; NULL = print a test line
-static char s_test_line[64];
+#define TEST_LINE_MAX 64
 
 static void send(const void *data, size_t len)
 {
@@ -163,32 +159,21 @@ static void send_job(const printer_job_t *job)
     finish_ticket();
 }
 
-static void printer_task(void *arg)
+/* Print the test line. The board also listens on its own TX pin, so it can check that the
+ * bytes really appear on the pin (this says nothing about the wire or the printer). */
+static void send_test_line(const char *text)
 {
-    for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // sleep until there is something to print
-        if (s_job) {
-            ESP_LOGI(TAG, "sending ticket #%04u to the printer", (unsigned)s_job->number);
-            send_job(s_job);
-            uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
-            ESP_LOGI(TAG, "done");
-        } else {
-            // The board also listens on its own TX pin, so it can check that the bytes
-            // really appear on the pin (this says nothing about the wire or the printer).
-            char echo[sizeof(s_test_line) + 8];
-            uart_flush_input(PRINTER_UART);
-            CMD("\x1B@");
-            send_text(s_test_line);
-            CMD("\n\n");   // no cut, so trying several settings in a row wastes little paper
-            uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
-            int want = 2 + (int)strlen(s_test_line) + 2;
-            int got = uart_read_bytes(PRINTER_UART, echo, sizeof(echo), pdMS_TO_TICKS(100));
-            bool same = got == want && memcmp(echo + 2, s_test_line, strlen(s_test_line)) == 0;
-            ESP_LOGI(TAG, "pin check: sent %d bytes, saw %d on the pin: %s", want, got,
-                     same ? "OK, the board is sending" : "MISMATCH");
-        }
-        atomic_store(&s_busy, false);
-    }
+    char echo[TEST_LINE_MAX + 8];
+    uart_flush_input(PRINTER_UART);
+    CMD("\x1B@");
+    send_text(text);
+    CMD("\n\n");   // no cut, so trying several settings in a row wastes little paper
+    uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
+    int want = 2 + (int)strlen(text) + 2;
+    int got = uart_read_bytes(PRINTER_UART, echo, sizeof(echo), pdMS_TO_TICKS(100));
+    bool same = got == want && memcmp(echo + 2, text, strlen(text)) == 0;
+    ESP_LOGI(TAG, "pin check: sent %d bytes, saw %d on the pin: %s", want, got,
+             same ? "OK, the board is sending" : "MISMATCH");
 }
 
 static esp_err_t thermal_init(void)
@@ -206,32 +191,27 @@ static esp_err_t thermal_init(void)
     ESP_RETURN_ON_ERROR(uart_param_config(PRINTER_UART, &cfg), TAG, "uart config");
     ESP_RETURN_ON_ERROR(uart_set_pin(PRINTER_UART, PRINTER_TX_GPIO, PRINTER_TX_GPIO,
                                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE), TAG, "uart pins");
-    if (xTaskCreate(printer_task, "printer", 4096, NULL, 5, &s_task) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_ERROR(printer_fake_driver.init(), TAG, "last-ticket store");
     ESP_LOGI(TAG, "printer on GPIO%d at %d baud", PRINTER_TX_GPIO, PRINTER_BAUD);
     return ESP_OK;
 }
 
 static esp_err_t thermal_print(const printer_job_t *job)
 {
-    if (atomic_exchange(&s_busy, true)) {
-        ESP_LOGW(TAG, "still printing the previous ticket");
-        return ESP_ERR_INVALID_STATE;
-    }
-    // The fake driver logs the ticket and keeps a copy of it; print from that copy.
+    // The fake driver logs the ticket and keeps a copy of it for /api/last-ticket.
+    // That copy is made now, so "last ticket" is the last one that STARTED printing.
     printer_fake_driver.print(job);
-    s_job = printer_fake_driver.last_job();
-    xTaskNotifyGive(s_task);
+    ESP_LOGI(TAG, "sending ticket #%04u to the printer", (unsigned)job->number);
+    send_job(job);
+    uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
+    ESP_LOGI(TAG, "done");
     return ESP_OK;
 }
 
 esp_err_t printer_thermal_test(int baud, int pin, int invert)
 {
     static int s_pin = PRINTER_TX_GPIO, s_invert = 0;
-    if (atomic_exchange(&s_busy, true)) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    char line[TEST_LINE_MAX];
     if (baud > 0) {
         uart_set_baudrate(PRINTER_UART, baud);
     } else {
@@ -248,11 +228,10 @@ esp_err_t printer_thermal_test(int baud, int pin, int invert)
         uart_set_line_inverse(PRINTER_UART, invert ? UART_SIGNAL_TXD_INV : UART_SIGNAL_INV_DISABLE);
         s_invert = invert ? 1 : 0;
     }
-    snprintf(s_test_line, sizeof(s_test_line), "TikPrint test: %d baud, pin %d%s\n",
+    snprintf(line, sizeof(line), "TikPrint test: %d baud, pin %d%s\n",
              baud, s_pin, s_invert ? ", inverted" : "");
     ESP_LOGI(TAG, "test print: %d baud, GPIO%d%s", baud, s_pin, s_invert ? ", inverted" : "");
-    s_job = NULL;
-    xTaskNotifyGive(s_task);
+    send_test_line(line);
     return ESP_OK;
 }
 
@@ -261,9 +240,22 @@ static const printer_job_t *thermal_last_job(void)
     return printer_fake_driver.last_job();
 }
 
+static void thermal_last_job_lock(void)
+{
+    printer_fake_driver.last_job_lock();
+}
+
+static void thermal_last_job_unlock(void)
+{
+    printer_fake_driver.last_job_unlock();
+}
+
 const printer_driver_t printer_thermal_driver = {
     .name = "thermal (ESC/POS over serial)",
     .init = thermal_init,
     .print = thermal_print,
+    // The last ticket lives in the fake driver's copy (see thermal_print), so reading it goes there too.
     .last_job = thermal_last_job,
+    .last_job_lock = thermal_last_job_lock,
+    .last_job_unlock = thermal_last_job_unlock,
 };

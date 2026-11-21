@@ -64,17 +64,27 @@ web: GET /
 ## API quick reference
 
 ```sh
-curl http://tikprint.local/api/status
+curl http://tikprint.local/api/status               # includes "print_queue": {"waiting": 2, "printing": true}
 curl http://tikprint.local/api/wifi/scan
 curl -d '{"ssid":"NAME","password":"PASSWORD"}' http://tikprint.local/api/wifi/connect
 curl -X POST http://tikprint.local/api/wifi/forget
-curl http://tikprint.local/api/last-ticket          # the last ticket the printer received
+curl http://tikprint.local/api/last-ticket          # the last ticket that started printing
 open http://tikprint.local/api/last-ticket.pbm      # its image, exactly as the printer got it
 curl "http://tikprint.local/api/diag/ping?ip=1.1.1.1"   # make the board ping something (troubleshooting)
-curl "http://tikprint.local/api/diag/printer-test"            # print one test line
+curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
 ```
+
+`POST /api/print` (what the Print button sends) answers as soon as the ticket is in the print queue:
+
+```json
+{"ok":true,"number":42,"ticket_count":42,"queued":true,"position":2}
+```
+
+- `position` is the ticket's place in line: 0 = printing now, 2 = two tickets ahead of it.
+- `queued` is true when it has to wait (`position` above 0).
+- If the queue is full: `{"ok":false,"error":"queue_full","message":"The print queue is full, try again in a moment"}`.
 
 ## Printing
 
@@ -96,7 +106,16 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
   are named constants at the top of `main/printer_thermal.c`.
 - The wire is one-way, so the board cannot tell if the printer is off or out of paper.
 - A ticket is sent in the background; a tall image takes a few seconds.
-  Pressing Print again before it finishes gives "Still printing the last ticket".
+- There is a print queue (`main/print_queue.c`). Pressing Print while a ticket is printing
+  puts the new one in line, and the page says "Queued 0042, 2nd in line". Tickets print
+  in the order they were sent.
+- A ticket gets its number when it joins the queue, so numbers follow that order and never repeat.
+- The queue holds up to 8 waiting tickets and 4 MB of image dots. Past that, Print answers
+  "The print queue is full, try again in a moment". Both limits are named constants at the
+  top of `main/print_queue.c`.
+- Each waiting ticket is its own copy in PSRAM, freed when it has printed. The queue is
+  not saved: tickets still waiting are lost if the board loses power.
+- The test line (`/api/diag/printer-test`) answers "busy" while anything is printing or waiting.
 - The ticket is a small word processor. Select text, then use the toolbar above it:
   font, size (in points, true to size on paper), bold, italic, underline, and
   left / centre / right. One ticket can mix as many fonts and sizes as you like.
@@ -111,8 +130,10 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 - A ticket sent without the browser (for example with `curl`) still prints in the printer's
   built-in font, which only knows plain characters (☐ becomes `[ ]`, unknown ones print as `?`).
 - Every ticket is also written to the log with an ASCII-art picture of any image
-  (`idf.py -p /dev/cu.usbmodem5B901739161 monitor`), and the last one is remembered.
+  (`idf.py -p /dev/cu.usbmodem5B901739161 monitor`) when it starts printing, and the last
+  one that started is remembered (`/api/last-ticket`).
 - To run with no printer attached, point `s_driver` in `main/printer.c` at `printer_fake_driver`.
+  The queue works the same way with it.
 
 - Files are prepared in the browser: blank margins are trimmed, the content is
   scaled to 576 dots wide and turned into pure black and white dots (a clean
@@ -142,6 +163,7 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 | `main/api.c` | The JSON API the UI calls (`/api/...`) |
 | `main/counter.c` | Ticket counter saved on the board (NVS) |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
+| `main/print_queue.c` | The print queue: tickets wait in line and print one at a time |
 | `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire |
 | `main/printer_fake.c` | Fake printer: logs tickets and keeps the last one in PSRAM |
 | `main/web_server.c` | HTTP server on port 80; serves the embedded UI |

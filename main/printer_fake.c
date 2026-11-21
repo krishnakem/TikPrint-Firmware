@@ -4,12 +4,19 @@
  * - "Prints" by writing the ticket to the UART log, with an ASCII-art preview
  *   of any image.
  * - Keeps a copy of the last job in PSRAM so GET /api/last-ticket can return it.
+ *   The print queue calls print() on its own task while the web server may be
+ *   reading that copy, so the copy is guarded by a lock (s_last_lock).
+ *
+ * The thermal driver also calls print() here for every ticket, to get the log
+ * and the "last ticket" copy.
  */
 #include <string.h>
 #include <stdlib.h>
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "printer.h"
 
@@ -25,6 +32,7 @@ static printer_job_t s_last;     // pointers below are owned by this file
 static char *s_title, *s_body, *s_source;
 static uint8_t *s_image;
 static bool s_have_last;
+static SemaphoreHandle_t s_last_lock;   // held while the last job is being read or replaced
 
 static void *psram_alloc(size_t n)
 {
@@ -79,8 +87,24 @@ static void log_image_preview(const uint8_t *img, uint16_t rows)
     }
 }
 
+/* The lock only exists after init(). Without it (the driver used on its own, from one task) there is nothing to guard. */
+static void fake_last_job_lock(void)
+{
+    if (s_last_lock) {
+        xSemaphoreTake(s_last_lock, portMAX_DELAY);
+    }
+}
+
+static void fake_last_job_unlock(void)
+{
+    if (s_last_lock) {
+        xSemaphoreGive(s_last_lock);
+    }
+}
+
 static void remember(const printer_job_t *job)
 {
+    fake_last_job_lock();   // waits here if the web server is sending the old copy to a browser
     free(s_title);
     free(s_body);
     free(s_source);
@@ -108,6 +132,15 @@ static void remember(const printer_job_t *job)
         .text_in_image = s_image && job->text_in_image,
     };
     s_have_last = true;
+    fake_last_job_unlock();
+}
+
+static esp_err_t fake_init(void)
+{
+    if (!s_last_lock) {
+        s_last_lock = xSemaphoreCreateMutex();
+    }
+    return s_last_lock ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 static esp_err_t fake_print(const printer_job_t *job)
@@ -138,6 +171,9 @@ static const printer_job_t *fake_last_job(void)
 
 const printer_driver_t printer_fake_driver = {
     .name = "fake (prints to the UART log)",
+    .init = fake_init,
     .print = fake_print,
     .last_job = fake_last_job,
+    .last_job_lock = fake_last_job_lock,
+    .last_job_unlock = fake_last_job_unlock,
 };
