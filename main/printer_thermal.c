@@ -25,7 +25,6 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 #include "esp_log.h"
 #include "esp_check.h"
@@ -50,25 +49,12 @@ static const char *TAG = "thermal_printer";
 #define HEADER_DATE_FORMAT "%b %d, %Y"     // header line of built-in font tickets, e.g. "Nov 20, 2026" (strftime patterns)
 #define HEADER_TIME_FORMAT "%I:%M %p %Z"   //                                        e.g. "10:05 PM EST"
 
-/* How an image is sent: BAND_ROWS rows per command, and an optional pause after each band.
- * The pause is PACE_US_PER_DOT microseconds for every black dot in the band, so dark bands
- * get long pauses and text gets none. 0 = no pauses.
- *
- * Why this matters: on this printer, large dark areas come out squashed (the paper does not
- * advance a full step for every row), while light areas print true to size. Measurements so
- * far (/api/diag/printer-pace prints a strip to compare settings) show the printer takes the
- * data without trouble, so it is not about the board sending too fast for the printer's
- * memory. Giving the printer time between dark rows helped, which points at its power supply
- * struggling when many dots are heated in a row. */
-#define BAND_ROWS       64
-#define PACE_US_PER_DOT 0
+/* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
+#define BAND_ROWS 64
 
 /* Blank rows printed after a ticket's image: a bottom margin about as tall as the top one.
  * (The top margin comes for free: it is the paper between the print head and the cutter.) */
 #define FOOTER_ROWS 64
-
-/* Pace test (/api/diag/printer-pace): the most settings one strip can compare, and the tallest block. */
-#define PACE_TEST_MAX_ROWS 200
 
 #define TEST_LINE_MAX 64
 
@@ -159,41 +145,17 @@ static void send_text(const char *s)
     send(out, n);
 }
 
-/* Send image rows band_rows at a time. After each band, wait us_per_dot microseconds per black
- * dot in it. The task can only sleep in steps of one tick (10 ms), so short waits are saved
- * up and taken together once they add up to a tick. */
-static void send_image_paced(const uint8_t *img, uint16_t rows, int band_rows, int us_per_dot)
+static void send_image(const uint8_t *img, uint16_t rows)
 {
-    const int64_t tick_us = (int64_t)portTICK_PERIOD_MS * 1000;
-    int64_t owed_us = 0;
-    for (uint16_t y = 0; y < rows; y += band_rows) {
-        uint16_t h = rows - y < band_rows ? rows - y : band_rows;
-        const uint8_t *band = img + (size_t)y * PRINTER_WIDTH_BYTES;
-        size_t len = (size_t)h * PRINTER_WIDTH_BYTES;
+    for (uint16_t y = 0; y < rows; y += BAND_ROWS) {
+        uint16_t h = rows - y < BAND_ROWS ? rows - y : BAND_ROWS;
         // GS v 0: "print a raster image". Then width in bytes and height in rows, low byte first.
         const uint8_t head[] = { 0x1D, 'v', '0', 0,
                                  PRINTER_WIDTH_BYTES & 0xFF, PRINTER_WIDTH_BYTES >> 8,
                                  h & 0xFF, h >> 8 };
         send(head, sizeof(head));
-        send(band, len);
-        if (us_per_dot > 0) {
-            uint32_t black = 0;
-            for (size_t i = 0; i < len; i++) {
-                black += (uint32_t)__builtin_popcount(band[i]);
-            }
-            owed_us += (int64_t)black * us_per_dot;
-            if (owed_us >= tick_us) {
-                uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);   // the wait starts once the rows have really left
-                vTaskDelay((TickType_t)(owed_us / tick_us));
-                owed_us %= tick_us;
-            }
-        }
+        send(img + (size_t)y * PRINTER_WIDTH_BYTES, (size_t)h * PRINTER_WIDTH_BYTES);
     }
-}
-
-static void send_image(const uint8_t *img, uint16_t rows)
-{
-    send_image_paced(img, rows, BAND_ROWS, PACE_US_PER_DOT);
 }
 
 /* Blank paper, sent as an all-white image so it is fed exactly like picture rows. */
@@ -426,51 +388,6 @@ esp_err_t printer_thermal_test(int baud, int pin, int invert)
     ESP_LOGI(TAG, "test print: %d baud, GPIO%d%s", baud, s_pin, s_invert ? ", inverted" : "");
     send_test_line(line);
     xSemaphoreGive(s_uart_lock);
-    return ESP_OK;
-}
-
-/* ---------- Pace test ----------
- * Prints one strip with the same block several times, each sent a different way (rows per
- * command, pause per black dot), with a line of text above each block saying which.
- * Every block has the same number of rows, so on paper they should all be the same height.
- * A block that comes out shorter was squashed; the settings of the first full-height block
- * are the ones to use for BAND_ROWS and PACE_US_PER_DOT. */
-esp_err_t printer_thermal_pace_test(const printer_pace_test_t *t)
-{
-    if (t->count < 1 || t->count > PRINTER_PACE_VARIANTS || t->rows < 8 || t->rows > PACE_TEST_MAX_ROWS ||
-        t->black_percent < 0 || t->black_percent > 100) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    uint8_t *block = calloc((size_t)t->rows, PRINTER_WIDTH_BYTES);
-    if (!block) {
-        return ESP_ERR_NO_MEM;
-    }
-    // A fine, even pattern with the wanted share of black dots (100 = solid black).
-    for (int y = 0; y < t->rows; y++) {
-        for (int x = 0; x < PRINTER_WIDTH_DOTS; x++) {
-            if (((x * 37 + y * 61) % 100) < t->black_percent) {
-                block[y * PRINTER_WIDTH_BYTES + x / 8] |= 0x80 >> (x % 8);
-            }
-        }
-    }
-    xSemaphoreTake(s_uart_lock, portMAX_DELAY);
-    CMD("\x1B@");
-    for (int i = 0; i < t->count; i++) {
-        int band = t->band_rows[i] < 1 ? 1 : t->band_rows[i];
-        int us = t->us_per_dot[i] < 0 ? 0 : t->us_per_dot[i];
-        char label[TEST_LINE_MAX];
-        snprintf(label, sizeof(label), "%c: %d rows per command, %d us per dot\n", 'A' + i, band, us);
-        ESP_LOGI(TAG, "pace test %s", label);
-        send_text(label);
-        send_image_paced(block, (uint16_t)t->rows, band, us);
-        // Let this block finish and the printer settle before the next, so each one starts fresh.
-        uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
-        vTaskDelay(pdMS_TO_TICKS(1500));
-    }
-    finish_ticket();
-    uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
-    xSemaphoreGive(s_uart_lock);
-    free(block);
     return ESP_OK;
 }
 

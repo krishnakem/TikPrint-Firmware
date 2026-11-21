@@ -116,24 +116,6 @@ const char *printer_name(void);
  */
 esp_err_t printer_test(int baud, int pin, int invert);
 
-/** One pace test strip: up to PRINTER_PACE_VARIANTS blocks, each sent with its own settings. */
-#define PRINTER_PACE_VARIANTS 8
-typedef struct {
-    int count;                                // how many blocks
-    int band_rows[PRINTER_PACE_VARIANTS];     // rows per command for each block
-    int us_per_dot[PRINTER_PACE_VARIANTS];    // pause per black dot for each block, in microseconds
-    int rows;                                 // height of every block, in rows
-    int black_percent;                        // how black the blocks are (100 = solid)
-} printer_pace_test_t;
-
-/**
- * Print a strip that compares ways of sending a dark image (see printer_thermal_pace_test).
- *   ESP_ERR_INVALID_STATE  a ticket is printing or waiting
- *   ESP_ERR_NOT_SUPPORTED  the fake printer is in use
- *   ESP_ERR_INVALID_ARG    settings out of range
- */
-esp_err_t printer_pace_test(const printer_pace_test_t *test);
-
 /* Available drivers */
 extern const printer_driver_t printer_fake_driver;
 extern const printer_driver_t printer_thermal_driver;
@@ -142,6 +124,3 @@ extern const printer_driver_t printer_thermal_driver;
  *  baud > 0 = serial speed, pin >= 0 = board pin, invert 0/1 = flip the signal (-1 = leave as is).
  *  Call it through printer_test(), which makes sure no ticket is printing at the same time. */
 esp_err_t printer_thermal_test(int baud, int pin, int invert);
-
-/** Thermal driver only: the pace test. Call it through printer_pace_test(). */
-esp_err_t printer_thermal_pace_test(const printer_pace_test_t *test);
