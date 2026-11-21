@@ -15,6 +15,7 @@ typedef enum {
     WEATHER_NO_ZIP,        // no ZIP code has been set (or it is not in the table)
     WEATHER_NO_WIFI,       // the board is not on Wi-Fi, so it cannot reach the weather service
     WEATHER_UNREACHABLE,   // the weather service did not answer, or answered with an error
+    WEATHER_REFUSED,       // it answered "403 Access Denied": it does not accept this app's requests (see APP_CONTACT)
     WEATHER_BAD_ANSWER,    // it answered, but not with a forecast we can read
 } weather_result_t;
 
@@ -45,5 +46,5 @@ weather_result_t weather_locate(void);
  *  Also the ticket header's location when none is typed in. */
 void weather_get_place(char *out, size_t size);
 
-const char *weather_result_name(weather_result_t result);      // "ok", "no_zip", "no_wifi", "unreachable", "bad_answer"
+const char *weather_result_name(weather_result_t result);      // "ok", "no_zip", "no_wifi", "unreachable", "refused", "bad_answer"
 const char *weather_result_message(weather_result_t result);   // the same, as a sentence for people

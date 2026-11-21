@@ -15,6 +15,10 @@ typedef struct {
     char message[96];       // the same, as a sentence
     uint32_t ticket;        // its ticket number, if ok
     int s_ago;              // seconds since it finished
+    // Looking up the town of the ZIP code (separate from printing):
+    bool locating;          // the board is looking it up, or will try again shortly
+    char locate_error[16];  // "" = no problem so far, else why the last try failed ("no_wifi", "unreachable", "refused", ...)
+    char locate_message[96];// the same, as a sentence
 } automations_weather_status_t;
 
 /** Start the background task that fetches and prints automations. Call after printer_init(). */

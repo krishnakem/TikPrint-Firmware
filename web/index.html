@@ -203,9 +203,12 @@ button.kv:hover{background:var(--hover)}
 .bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
 /* The right-hand side of the "Check for updates" row: a short note in words, not in the code font */
 .kv span.say{display:inline-flex;align-items:center;gap:7px;font:13px var(--sans);color:var(--muted)}
-/* A green dot on the gear while newer firmware is waiting */
+/* A yellow dot on the gear while newer firmware is waiting (yellow = something to do; green = all is well) */
 #gearBtn{position:relative}
-#gearBtn.new::after{content:"";position:absolute;top:4px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--bg)}
+#gearBtn.new::after{content:"";position:absolute;top:4px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 2px var(--bg)}
+/* A line under the Location box: why a ZIP code was not taken, or why its town is not known yet */
+.locnote{font-size:12.5px;line-height:1.35;padding:8px 12px 9px;border-top:1px solid var(--line);color:var(--muted)}
+.locnote.bad{color:var(--bad)}
 .ok-state .link+.link{margin-top:6px}
 
 .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
@@ -265,7 +268,8 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     </div>
     <h3>Ticket header</h3>
     <div class="grp">
-      <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" placeholder="ZIP code" aria-label="Location: type a ZIP code"></div>
+      <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" placeholder="ZIP code" aria-label="Location: type a ZIP code"><span class="say" id="locBusy" hidden><span class="spin"></span><span id="locBusyText"></span></span></div>
+      <div class="locnote" id="locNote" role="status" hidden></div>
       <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
       <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
       <label class="kv"><span>Show time</span><input type="checkbox" class="sw" id="swTime"></label>
@@ -407,11 +411,27 @@ const typedLoc=(v,keep)=>(/^\d+$/.test(v)||v===zipCity)?keep:v;   // text in the
 let savedLoc='';        // the location text saved on the board ("" = use the ZIP code's town)
 const locBoxText=()=>savedLoc||zipCity||zip;   // what the Location box shows: the town, or the ZIP code until the town is known
 /* From /api/status: the weather ZIP code and the town the board found for it (a few seconds after the ZIP code is set). */
+let locating=false, locError='', locMessage='';   // the board's search for the ZIP code's town: still trying / why the last try failed
+let zipBad='';                                    // a ZIP code just typed that the board does not know
 function showZipPlace(a){
   const w=(a&&a.weather)||{}, city=(w.place||'').trim(), z=w.zip||'';
-  if(city===zipCity&&z===zip)return;
-  zipCity=city; zip=z; showHeader();
-  if(document.activeElement!==$('setLoc')&&!savingSettings)$('setLoc').value=locBoxText();
+  locating=!!w.locating; locError=w.locate_error||''; locMessage=w.locate_message||'';
+  if(city!==zipCity||z!==zip){
+    zipCity=city; zip=z; showHeader();
+    if(document.activeElement!==$('setLoc')&&!savingSettings)$('setLoc').value=locBoxText();
+  }
+  showLocState();
+}
+/* The Location row while the town is not known: "Finding 95014…" in place of the box, or the reason underneath. */
+function showLocState(){
+  const box=$('setLoc'), waiting=zip&&!zipCity&&!savedLoc;
+  const finding=waiting&&locating&&!locError&&!zipBad&&document.activeElement!==box;
+  $('locBusyText').textContent=`Finding ${zip}…`;
+  $('locBusy').hidden=!finding; box.hidden=finding;
+  const note=zipBad?`${zipBad} is not a US ZIP code.`:
+    waiting&&locError?(locating?'Couldn’t look up the town yet. Trying again every 10 seconds.':locMessage+'.'):'';
+  $('locNote').textContent=note; $('locNote').hidden=!note;
+  $('locNote').classList.toggle('bad',!!zipBad||(!locating&&locError==='refused'));
 }
 let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "PST"}
 function headerParts(){
@@ -560,6 +580,7 @@ async function saveZip(z){
   savingSettings++;
   let r=null; try{r=await api('/api/automations/weather',{zip:z})}catch(e){}
   savingSettings--;
+  if(r&&r.error==='bad_zip'){zipBad=z;showLocState();$('setLoc').focus();return}   // nothing saved: the box keeps what was typed, to correct it
   if(!r||!r.ok){toast((r&&r.message)||'Couldn’t save the ZIP code');$('setLoc').value=locBoxText();return}
   zipCity=''; zip=z; $('setLoc').value=z;   // the ZIP code shows until the board has found its town
   showZipPlace(r.automations);
@@ -571,8 +592,9 @@ $('setLoc').onchange=e=>{
   if(/^\d+$/.test(v)){toast('A ZIP code has five digits');e.target.value=locBoxText();return}
   saveSettings({location:typedLoc(v,'')}).then(()=>{if(document.activeElement!==e.target)e.target.value=locBoxText()});
 };
-$('setLoc').oninput=e=>{hdr={...hdr,location:typedLoc(e.target.value.trim(),savedLoc)};showHeader()};   // live preview while typing (not of a ZIP code)
+$('setLoc').oninput=e=>{zipBad='';showLocState();hdr={...hdr,location:typedLoc(e.target.value.trim(),savedLoc)};showHeader()};   // live preview while typing (not of a ZIP code)
 $('setLoc').onkeydown=e=>{if(e.key==='Enter')e.target.blur()};
+$('setLoc').onblur=e=>{if(zipBad){zipBad='';e.target.value=locBoxText()} showLocState()};   // leaving the box drops a ZIP code that was not taken
 
 /* ---------- Printer status ---------- */
 /* The board asks the printer how it is every few seconds (this needs the status wire).
@@ -676,7 +698,7 @@ document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(
 /* ---------- Firmware update ---------- */
 /* Settings > Firmware:
    - "Check for updates": the board asks GitHub for the latest release of the firmware. If it is newer than
-     what is running, the row turns into "Update to v0.3.0" and the gear gets a green dot. Installing it is one
+     what is running, the row turns into "Update to v0.3.0" and the gear gets a yellow dot. Installing it is one
      click: the board downloads the file from GitHub itself, checks it and restarts into it. This page shows
      the download, waits for the board to come back, then reloads itself so you get the new page too.
      The board also checks by itself once a day, so the dot can appear without anyone asking.
@@ -710,7 +732,7 @@ function showFirmware(s){
   $('fwCheckNote').innerHTML=
     checking||u.state==='checking'?'<span class="spin"></span>':
     busy?`${u.progress}%`:
-    u.available?'<span class="led"></span>New':
+    u.available?'<span class="led warn"></span>New':
     checkFailed?'Couldn’t check':
     u.checked_s_ago!=null?'Up to date':'<span class="go">›</span>';
 }
