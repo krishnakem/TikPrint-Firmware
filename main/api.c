@@ -11,6 +11,7 @@
  *   POST /api/print          put a ticket in the print queue (binary body, see print_post)
  *   GET  /api/diag/printer-test?baud=N  print one test line (optionally at another serial speed)
  *   GET  /api/diag/printer-status       ask the printer how it is; raw answer bytes + what they mean
+ *   GET  /api/diag/printer-speed        print a short test strip and time how fast light and dark rows print
  *   GET  /api/last-ticket    the last ticket that started printing (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
  *   POST /api/update/check   ask GitHub whether there is newer firmware (the answer shows up in /api/status)
@@ -548,6 +549,47 @@ static esp_err_t diag_printer_status_get(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/* ---------- GET /api/diag/printer-speed ----------
+ * Troubleshooting aid: prints a strip of five blocks (0, 25, 50, 75, 100 % black) and times each.
+ * Uses about 4 cm of paper and needs the status wire.
+ *   {"ok":true,"answers":true,"rows":48,"wire_ms_per_row":6.25,
+ *    "samples":[{"black_percent":50,"send_ms":310,"total_ms":520,"ms_per_row":10.8}, ...],
+ *    "xoff":0,"xon":0}
+ * "ms_per_row" above "wire_ms_per_row" means the printer prints that kind of row more slowly
+ * than the board sends it. "answers": false means the printer does not answer the question
+ * the test relies on, so nothing could be measured. "total_ms": null = no answer for that block. */
+static esp_err_t diag_printer_speed_get(httpd_req_t *req)
+{
+    printer_speed_report_t r;
+    esp_err_t err = printer_speed_test(&r);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
+    if (err != ESP_OK) {
+        cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer" : "busy");
+        return send_json(req, root);
+    }
+    cJSON_AddBoolToObject(root, "answers", r.answers);
+    cJSON_AddNumberToObject(root, "first_answer", r.first_answer);
+    cJSON_AddNumberToObject(root, "rows", r.rows);
+    cJSON_AddNumberToObject(root, "wire_ms_per_row", 6.25);
+    cJSON *samples = cJSON_AddArrayToObject(root, "samples");
+    for (int i = 0; r.answers && i < PRINTER_SPEED_SAMPLES; i++) {
+        cJSON *one = cJSON_CreateObject();
+        cJSON_AddNumberToObject(one, "black_percent", r.black_percent[i]);
+        cJSON_AddNumberToObject(one, "send_ms", r.send_ms[i]);
+        if (r.total_ms[i] >= 0) {
+            cJSON_AddNumberToObject(one, "total_ms", r.total_ms[i]);
+            cJSON_AddNumberToObject(one, "ms_per_row", (double)(r.total_ms[i] * 10 / r.rows) / 10);
+        } else {
+            cJSON_AddNullToObject(one, "total_ms");
+        }
+        cJSON_AddItemToArray(samples, one);
+    }
+    cJSON_AddNumberToObject(root, "xoff", r.xoff);
+    cJSON_AddNumberToObject(root, "xon", r.xon);
+    return send_json(req, root);
+}
+
 /* ---------- POST /api/wifi/forget ---------- */
 static esp_err_t wifi_forget_post(httpd_req_t *req)
 {
@@ -945,6 +987,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/diag/ping",    .method = HTTP_GET,  .handler = diag_ping_get },
         { .uri = "/api/diag/printer-test", .method = HTTP_GET, .handler = diag_printer_test_get },
         { .uri = "/api/diag/printer-status", .method = HTTP_GET, .handler = diag_printer_status_get },
+        { .uri = "/api/diag/printer-speed", .method = HTTP_GET, .handler = diag_printer_speed_get },
         { .uri = "/api/wifi/scan",    .method = HTTP_GET,  .handler = wifi_scan_get },
         { .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = wifi_connect_post },
         { .uri = "/api/wifi/forget",  .method = HTTP_POST, .handler = wifi_forget_post },
