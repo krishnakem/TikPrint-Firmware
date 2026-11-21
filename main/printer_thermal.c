@@ -50,7 +50,19 @@ static const char *TAG = "thermal_printer";
 #define HEADER_TIME_FORMAT "%I:%M %p %Z"   //                                        e.g. "10:05 PM EST"
 
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
-#define BAND_ROWS 64
+#define BAND_ROWS 32
+
+/* Pacing for dark images.
+ * There is no "wait, I'm busy" wire between the printer and the board, so the board must not
+ * send faster than the printer prints. Mostly-white rows (text) print faster than the serial
+ * wire can deliver them. Rows with a lot of black are slow, because the printer heats a row's
+ * dots a group at a time. If the board keeps sending at full speed through a dark image, the
+ * printer's small memory fills up and it drops what does not fit: the rest of the picture
+ * comes out squashed. So after each band the board waits a little, longer the blacker the band:
+ * PACE_US_PER_BLACK_DOT microseconds per black dot. A fully black row (576 dots) adds about
+ * 14 ms; a row of text adds almost nothing. Raise it if dark images still come out squashed
+ * towards the end; lower it to print dark images faster. */
+#define PACE_US_PER_BLACK_DOT 24
 
 #define TEST_LINE_MAX 64
 
@@ -145,12 +157,25 @@ static void send_image(const uint8_t *img, uint16_t rows)
 {
     for (uint16_t y = 0; y < rows; y += BAND_ROWS) {
         uint16_t h = rows - y < BAND_ROWS ? rows - y : BAND_ROWS;
+        const uint8_t *band = img + (size_t)y * PRINTER_WIDTH_BYTES;
+        size_t len = (size_t)h * PRINTER_WIDTH_BYTES;
         // GS v 0: "print a raster image". Then width in bytes and height in rows, low byte first.
         const uint8_t head[] = { 0x1D, 'v', '0', 0,
                                  PRINTER_WIDTH_BYTES & 0xFF, PRINTER_WIDTH_BYTES >> 8,
                                  h & 0xFF, h >> 8 };
         send(head, sizeof(head));
-        send(img + (size_t)y * PRINTER_WIDTH_BYTES, (size_t)h * PRINTER_WIDTH_BYTES);
+        send(band, len);
+
+        // Give the printer time to print this band before the next one arrives (see PACE_US_PER_BLACK_DOT).
+        uint32_t black = 0;
+        for (size_t i = 0; i < len; i++) {
+            black += (uint32_t)__builtin_popcount(band[i]);
+        }
+        uint32_t wait_ms = black * PACE_US_PER_BLACK_DOT / 1000;
+        if (wait_ms > 0) {
+            uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);   // the wait starts once the band has really left
+            vTaskDelay(pdMS_TO_TICKS(wait_ms));
+        }
     }
 }
 
