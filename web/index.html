@@ -133,6 +133,26 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
 .mi .r.ok{color:var(--ok)}
 .sep{height:1px;background:var(--line);margin:5px 4px}
+/* The Weather panel: shown in the Connectors menu in place of the list */
+.menu.wide{width:300px;padding:8px}
+.menu [hidden]{display:none}
+.menu h3{font-size:13px;font-weight:600;color:var(--muted);margin:12px 10px 6px}
+.wxhead{display:flex;align-items:center;gap:10px;padding:4px 6px 10px;font-size:14px;font-weight:600}
+.wxhead .back{color:var(--muted);font-size:20px;line-height:1;padding:0 4px}
+.wxhead .back:hover{color:var(--ink)}
+.wxhead .ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:700 11px var(--sans);color:#fff;background:#f5a623}
+.wxhead .sw{margin-left:auto}
+.wxpad{padding:10px 12px;display:flex;flex-direction:column;gap:10px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{flex:1;padding:6px 6px;font-size:13px;color:var(--muted);white-space:nowrap}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--btn);color:var(--btn-ink)}
+.wxbtn{height:36px;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600}
+.wxbtn:disabled{opacity:.5;cursor:default}
+.kv .wxl{display:flex;align-items:center;gap:10px}
+.kv .wxl span:last-child,.kv span.ink:first-child{color:var(--ink);font:14px var(--sans);white-space:nowrap}
+.kv input[type=time]{border:1px solid var(--line);border-radius:7px;background:transparent;padding:4px 6px;font:13px var(--mono);color:var(--ink);color-scheme:light dark}
+.locnote button{text-decoration:underline;text-underline-offset:2px;color:var(--ink);font-size:inherit}
 .print{margin-left:auto;height:40px;padding:0 18px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
 .print:disabled{opacity:.4;cursor:default}
 /* Quiet note under the Print button, only while the printer has a problem */
@@ -333,13 +353,34 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
         Connectors
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
-      <div class="menu">
-        <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
-        <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
-        <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
-        <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r ok" id="connWx">Print</span></button>
-        <div class="sep"></div>
-        <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
+      <div class="menu" id="connMenu">
+        <div id="connList">
+          <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r" id="connWx">›</span></button>
+          <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
+          <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
+          <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
+          <div class="sep"></div>
+          <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
+        </div>
+        <!-- Weather: print now, and when it prints by itself -->
+        <div id="wxPanel" hidden>
+          <div class="wxhead"><button class="back" id="wxBack" aria-label="Back to connectors">‹</button><span class="ico">☀</span>Weather<input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
+          <div class="grp wxpad">
+            <div class="seg" id="wxKind" role="group" aria-label="What to print">
+              <button data-k="today" class="on">Today</button><button data-k="rest">Rest of today</button><button data-k="tomorrow">Tomorrow</button>
+            </div>
+            <button class="wxbtn" id="wxPrint">Print now</button>
+          </div>
+          <h3>Place</h3>
+          <div class="grp"><div class="kv"><span class="ink" id="wxPlace"></span><span class="say">Settings › Location</span></div></div>
+          <h3>Schedule</h3>
+          <div class="grp">
+            <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
+            <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
+            <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
+            <div class="locnote">Up to 3 scheduled prints a day. <button id="wxPro">Upgrade to Pro</button> for more.</div>
+          </div>
+        </div>
       </div>
     </div>
     <button class="print" id="printBtn">Print</button>
@@ -421,7 +462,7 @@ function showZipPlace(a){
     zipCity=city; zip=z; showHeader();
     if(document.activeElement!==$('setLoc')&&!savingSettings)$('setLoc').value=locBoxText();
   }
-  showLocState();
+  showLocState(); showWeatherPanel(w);
 }
 /* The Location row while the town is not known: "Finding 95014…" in place of the box, or the reason underneath. */
 function showLocState(){
@@ -693,7 +734,7 @@ function closeAll(except){
 }
 $('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
-$('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);$('conn').classList.toggle('open',o)};
+$('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);if(o)showConnView(false);$('conn').classList.toggle('open',o)};
 document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(null)});
 
 /* ---------- Firmware update ---------- */
@@ -1184,17 +1225,53 @@ document.addEventListener('paste',e=>{
 $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
 
 /* ---------- Connectors ---------- */
-/* Weather prints the real forecast: the board fetches it from the National Weather Service and
-   prints it itself (nothing is put on the ticket here). The other connectors are not built yet. */
-let weatherBusy=false;
+/* Weather is the one connector so far. Clicking it opens its panel in the menu: "Print now" for
+   today, the rest of today or tomorrow, and the schedule (three times a day, each with a switch;
+   the switch at the top is for the whole schedule). The board fetches the forecast from the
+   National Weather Service and prints it itself: nothing is put on the ticket here.
+   The schedule lives on the board (POST /api/automations/weather), so it runs with no page open. */
+function showConnView(weather){
+  $('connList').hidden=weather; $('wxPanel').hidden=!weather; $('connMenu').classList.toggle('wide',weather);
+}
+let wxSaving=0, wxKind='today', weatherBusy=false;
+/* From /api/status ("automations": "weather"): the place and the schedule. */
+function showWeatherPanel(w){
+  const sch=w.schedule; if(!sch)return;
+  const n=sch.slots.filter(x=>x.on).length, where=(w.place||w.zip||'').split(',')[0];
+  $('connWx').textContent=!w.zip?'Set up ›':`${where} · ${sch.on&&n?n+' a day':'off'} ›`;
+  $('wxPlace').textContent=w.place||w.zip||'No ZIP code yet';
+  if(wxSaving)return;   // don't let an older status report undo a change that is on its way
+  $('wxOn').checked=sch.on;
+  sch.slots.forEach((x,i)=>{if(document.activeElement!==$('wxT'+i))$('wxT'+i).value=x.time; $('wxS'+i).checked=x.on});
+}
+async function saveWeather(change){
+  wxSaving++;
+  let r=null; try{r=await api('/api/automations/weather',change)}catch(e){}
+  wxSaving--;
+  if(!r||!r.ok)toast((r&&r.message)||'Couldn’t save that');
+  if(r&&r.automations)showZipPlace(r.automations); else refreshStatus();
+}
+function saveWeatherSlots(){
+  const slots=[0,1,2].map(i=>({time:$('wxT'+i).value,on:$('wxS'+i).checked}));
+  if(slots.some(x=>!x.time))return refreshStatus();   // a time was emptied: put back what the board has
+  saveWeather({slots});
+}
+$('wxOn').onchange=e=>saveWeather({on:e.target.checked});
+[0,1,2].forEach(i=>{$('wxT'+i).onchange=saveWeatherSlots; $('wxS'+i).onchange=saveWeatherSlots});
+$('wxKind').onclick=e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  wxKind=b.dataset.k; [...$('wxKind').children].forEach(c=>c.classList.toggle('on',c===b));
+};
+$('wxBack').onclick=()=>showConnView(false);
+$('wxPro').onclick=()=>toast('Pro isn’t available yet');
+$('wxPrint').onclick=printWeather;
 async function printWeather(){
   if(weatherBusy)return;
   if(!zip){toast('Type your ZIP code in Settings › Location first');return}
-  weatherBusy=true;
+  weatherBusy=true; $('wxPrint').disabled=true; $('wxPrint').textContent='Getting the weather…';
   try{
-    let r=null; try{r=await api('/api/automations/weather/print-now',{kind:'today'})}catch(e){}
+    let r=null; try{r=await api('/api/automations/weather/print-now',{kind:wxKind})}catch(e){}
     if(!r||!r.ok){toast((r&&r.message)||'Couldn’t reach the printer');return}
-    toast('Getting the weather…');
     // The board answers at once and fetches in the background: wait until it says how it went.
     for(let i=0;i<40;i++){
       await new Promise(done=>setTimeout(done,1000));
@@ -1203,11 +1280,12 @@ async function printWeather(){
       if(w&&!w.busy&&w.last){toast(w.last.ok?'Printing the weather':w.last.message);return}
     }
     toast('The weather is taking a long time. Check the Wi-Fi');
-  }finally{weatherBusy=false}
+  }finally{weatherBusy=false; $('wxPrint').disabled=false; $('wxPrint').textContent='Print now'}
 }
-document.querySelector('#conn .menu').addEventListener('click',e=>{
-  const b=e.target.closest('.mi'); if(!b)return; const c=b.dataset.c; closeAll(null);
-  if(c==='weather')printWeather(); else toast('Coming soon');
+$('connList').addEventListener('click',e=>{
+  const b=e.target.closest('.mi'); if(!b)return;
+  if(b.dataset.c==='weather')return showConnView(true);
+  closeAll(null); toast('Coming soon');
 });
 $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 

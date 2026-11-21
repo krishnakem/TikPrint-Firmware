@@ -11,6 +11,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -20,8 +21,12 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
+#include "nvs.h"
+
 #include "automations.h"
+#include "clock.h"
 #include "printer.h"
+#include "settings.h"
 #include "weather_icons.h"
 
 static const char *TAG = "automations";
@@ -29,24 +34,43 @@ static const char *TAG = "automations";
 #define TASK_STACK    12288   // HTTPS needs a deep stack
 #define TASK_PRIORITY 4
 #define MAX_JOBS      4       // jobs that can wait in the mailbox
-#define LOCATE_RETRY_MS  10000   // the ZIP code's town could not be looked up (no Wi-Fi yet?): try again this often
-#define LOCATE_RETRIES   30      // ... this many times (5 minutes), then wait for the next print or ZIP code change
+#define TICK_MS          10000   // how often the task looks at the clock (and retries a town lookup)
+#define LOCATE_RETRIES   30      // town lookups that may fail in a row (5 minutes), then wait for the next print or ZIP code change
+#define SLOT_WINDOW_MIN  15      // a scheduled print that cannot get the weather keeps trying this long, then is skipped
+#define SLOT_RETRY_MS    60000   // ... trying this often
+#define NVS_NS           "auto"
 
-typedef enum { JOB_WEATHER_LOCATE, JOB_WEATHER_PRINT } job_type_t;
+typedef enum { JOB_WEATHER_LOCATE, JOB_WEATHER_PRINT, JOB_WEATHER_SLOT } job_type_t;
 
 typedef struct {
     job_type_t type;
     weather_kind_t kind;
+    int slot;
 } job_t;
+
+/* How a try at a weather ticket ended. */
+typedef enum { PRINT_OK, PRINT_TRY_LATER, PRINT_FAILED } print_result_t;
+
+/* What each slot of the schedule prints. */
+static const weather_kind_t SLOT_KIND[SETTINGS_WEATHER_SLOTS] = { WEATHER_TODAY, WEATHER_REST_OF_TODAY, WEATHER_TOMORROW };
+
+/* Which scheduled prints are done, so that none prints twice and the daily limit holds even
+ * if the board restarts. Saved on the board as one block. Days are numbers like 20261121. */
+typedef struct {
+    int32_t slot_day[SETTINGS_WEATHER_SLOTS];   // the day each slot last printed or was skipped
+    int32_t count_day;                          // the day "count" is about
+    int32_t count;                              // scheduled tickets printed that day
+} fired_t;
 
 static QueueHandle_t s_jobs;
 static SemaphoreHandle_t s_lock;               // guards the three below
 static automations_weather_status_t s_weather;
 static int64_t s_weather_done_us;
 static bool s_print_pending;                   // a "print now" is in the mailbox or being worked on
+static fired_t s_fired;                        // guarded by s_lock too
 
-/* Note how a weather print ended. */
-static void weather_finished(bool ok, const char *error, const char *message, uint32_t ticket)
+/* Note how a weather print ended. manual: it was asked for with "print now". */
+static void weather_finished(bool manual, bool ok, const char *error, const char *message, uint32_t ticket)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_weather.ran = true;
@@ -55,7 +79,9 @@ static void weather_finished(bool ok, const char *error, const char *message, ui
     strlcpy(s_weather.message, message, sizeof(s_weather.message));
     s_weather.ticket = ticket;
     s_weather_done_us = esp_timer_get_time();
-    s_print_pending = false;
+    if (manual) {
+        s_print_pending = false;
+    }
     xSemaphoreGive(s_lock);
     if (ok) {
         ESP_LOGI(TAG, "weather ticket #%04u joined the print queue", (unsigned)ticket);
@@ -64,8 +90,9 @@ static void weather_finished(bool ok, const char *error, const char *message, ui
     }
 }
 
-static void weather_print(weather_kind_t kind, bool spread_load)
+static print_result_t weather_print(weather_kind_t kind, bool spread_load, bool manual)
 {
+    print_result_t result = PRINT_FAILED;
     // The text is built in PSRAM (the big external RAM); the print queue then takes its own copy.
     char source[WEATHER_SOURCE_MAX], title[WEATHER_TITLE_MAX];
     char *body = heap_caps_malloc(WEATHER_BODY_MAX, MALLOC_CAP_SPIRAM);
@@ -74,13 +101,14 @@ static void weather_print(weather_kind_t kind, bool spread_load)
     if (!body || !strip) {
         free(body);
         free(strip);
-        weather_finished(false, "no_memory", "The printer is out of memory", 0);
-        return;
+        weather_finished(manual, false, "no_memory", "The printer is out of memory", 0);
+        return PRINT_TRY_LATER;
     }
     ESP_LOGI(TAG, "making a weather ticket (%s)", weather_kind_name(kind));
     weather_result_t res = weather_make_ticket(kind, spread_load, source, title, body, &icon);
     if (res != WEATHER_OK) {
-        weather_finished(false, weather_result_name(res), weather_result_message(res), 0);
+        weather_finished(manual, false, weather_result_name(res), weather_result_message(res), 0);
+        result = (res == WEATHER_NO_WIFI || res == WEATHER_UNREACHABLE) ? PRINT_TRY_LATER : PRINT_FAILED;
     } else {
         printer_job_t job = { .title = title, .body = body, .source = source };
         if (icon != WEATHER_ICON_NONE) {
@@ -91,13 +119,121 @@ static void weather_print(weather_kind_t kind, bool spread_load)
         }
         printer_ticket_t ticket;
         if (printer_print_job(&job, &ticket) == ESP_OK) {
-            weather_finished(true, "", "", ticket.number);
+            weather_finished(manual, true, "", "", ticket.number);
+            result = PRINT_OK;
         } else {
-            weather_finished(false, "queue_full", "The print queue is full, try again in a moment", 0);
+            weather_finished(manual, false, "queue_full", "The print queue is full, try again in a moment", 0);
+            result = PRINT_TRY_LATER;
         }
     }
     free(body);
     free(strip);
+    return result;
+}
+
+/* ---------- The schedule ---------- */
+
+static void fired_save(void)
+{
+    fired_t copy;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    copy = s_fired;
+    xSemaphoreGive(s_lock);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, "wx_fired", &copy, sizeof(copy));
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static int32_t day_number(time_t t)
+{
+    struct tm tm;
+    localtime_r(&t, &tm);
+    return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
+}
+
+/* Look at the clock: is it time for a scheduled weather ticket? Called every TICK_MS.
+ *
+ * A slot is "due" from its time until SLOT_WINDOW_MIN minutes later. In that window it is tried
+ * until a ticket prints. If the weather cannot be had (Wi-Fi down, no answer), it is tried again
+ * every minute, and skipped when the window ends. Each slot prints at most once a day, and all
+ * slots together at most AUTOMATIONS_WEATHER_MAX_PER_DAY times. */
+static void schedule_check(void)
+{
+    static int64_t retry_at_us[SETTINGS_WEATHER_SLOTS];   // not before this (board uptime)
+    static int32_t trying_day[SETTINGS_WEATHER_SLOTS];    // the day a slot was first tried, to tell first tries from retries
+
+    clock_status_t clk;
+    settings_weather_schedule_t sched;
+    clock_get_status(&clk);
+    settings_get_weather_schedule(&sched);
+    if (!clk.set || !sched.on) {
+        return;   // without the time there is no schedule; it catches up once the clock is set
+    }
+    for (int i = 0; i < SETTINGS_WEATHER_SLOTS; i++) {
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        int late_min = (tm.tm_hour * 60 + tm.tm_min - sched.slot[i].minute + 24 * 60) % (24 * 60);
+        if (!sched.slot[i].on || late_min >= SLOT_WINDOW_MIN) {
+            continue;
+        }
+        int32_t day = day_number(now - late_min * 60);   // the day the slot started (matters just after midnight)
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool done = s_fired.slot_day[i] == day;
+        bool limit = s_fired.count_day == day && s_fired.count >= AUTOMATIONS_WEATHER_MAX_PER_DAY;
+        xSemaphoreGive(s_lock);
+        if (done || limit || esp_timer_get_time() < retry_at_us[i]) {
+            continue;
+        }
+        bool first_try = trying_day[i] != day;
+        trying_day[i] = day;
+        ESP_LOGI(TAG, "scheduled weather print %d (%s)%s", i + 1, weather_kind_name(SLOT_KIND[i]), first_try ? "" : ", trying again");
+        // Only the first try waits a random moment (so that not every printer asks at 7:30:00 sharp).
+        print_result_t res = weather_print(SLOT_KIND[i], first_try, false);
+        if (res == PRINT_TRY_LATER && late_min < SLOT_WINDOW_MIN - 1) {
+            retry_at_us[i] = esp_timer_get_time() + SLOT_RETRY_MS * 1000LL;
+            continue;
+        }
+        if (res != PRINT_OK) {
+            ESP_LOGW(TAG, "scheduled weather print %d skipped for today", i + 1);
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_fired.slot_day[i] = day;
+        if (res == PRINT_OK) {
+            if (s_fired.count_day != day) {
+                s_fired.count_day = day;
+                s_fired.count = 0;
+            }
+            s_fired.count++;
+        }
+        xSemaphoreGive(s_lock);
+        fired_save();
+    }
+}
+
+/* Look up the town of the saved ZIP code. Returns how many more tries are left. */
+static int locate(int locate_tries_left)
+{
+    weather_result_t res = weather_locate();
+    bool done = res == WEATHER_OK || res == WEATHER_NO_ZIP;
+    if (done || res == WEATHER_REFUSED) {
+        locate_tries_left = 0;   // found, nothing to find, or refused (asking again would not help)
+    } else {
+        locate_tries_left--;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_weather.locating = locate_tries_left > 0;
+    strlcpy(s_weather.locate_error, done ? "" : weather_result_name(res), sizeof(s_weather.locate_error));
+    strlcpy(s_weather.locate_message, done ? "" : weather_result_message(res), sizeof(s_weather.locate_message));
+    xSemaphoreGive(s_lock);
+    if (!done) {
+        ESP_LOGW(TAG, "could not look up the ZIP code's town (%s): %d more tries", weather_result_name(res),
+                 locate_tries_left);
+    }
+    return locate_tries_left;
 }
 
 static void automations_task(void *arg)
@@ -105,33 +241,38 @@ static void automations_task(void *arg)
     // At start-up: if a ZIP code is saved but its town is not known yet, look it up once Wi-Fi is there.
     int locate_tries_left = LOCATE_RETRIES;
     for (;;) {
-        // Wait for a job. While a town still has to be looked up, only wait a little, then try that again.
+        // Wait for a job, but never long: the schedule has to look at the clock.
         job_t job = { .type = JOB_WEATHER_LOCATE };
-        bool got_job = xQueueReceive(s_jobs, &job, locate_tries_left > 0 ? pdMS_TO_TICKS(LOCATE_RETRY_MS) : portMAX_DELAY) == pdTRUE;
+        bool got_job = xQueueReceive(s_jobs, &job, pdMS_TO_TICKS(TICK_MS)) == pdTRUE;
         if (got_job && job.type == JOB_WEATHER_PRINT) {
-            weather_print(job.kind, false);   // asked for by a person: no random wait
-            continue;
+            weather_print(job.kind, false, true);   // asked for by a person: no random wait
+        } else if (got_job && job.type == JOB_WEATHER_SLOT) {
+            weather_print(SLOT_KIND[job.slot], false, false);   // a test of a scheduled print
+        } else if (got_job || locate_tries_left > 0) {
+            locate_tries_left = locate(got_job ? LOCATE_RETRIES : locate_tries_left);   // a new ZIP code starts afresh
         }
-        if (got_job) {
-            locate_tries_left = LOCATE_RETRIES;   // the ZIP code just changed: start afresh
-        }
-        weather_result_t res = weather_locate();
-        bool done = res == WEATHER_OK || res == WEATHER_NO_ZIP;
-        if (done || res == WEATHER_REFUSED) {
-            locate_tries_left = 0;   // found, nothing to find, or refused (asking again would not help)
-        } else {
-            locate_tries_left--;
-        }
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        s_weather.locating = locate_tries_left > 0;
-        strlcpy(s_weather.locate_error, done ? "" : weather_result_name(res), sizeof(s_weather.locate_error));
-        strlcpy(s_weather.locate_message, done ? "" : weather_result_message(res), sizeof(s_weather.locate_message));
-        xSemaphoreGive(s_lock);
-        if (!done) {
-            ESP_LOGW(TAG, "could not look up the ZIP code's town (%s): %d more tries", weather_result_name(res),
-                     locate_tries_left);
-        }
+        schedule_check();
     }
+}
+
+void automations_weather_slot_changed(int slot)
+{
+    if (slot < 0 || slot >= SETTINGS_WEATHER_SLOTS) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_fired.slot_day[slot] = 0;
+    xSemaphoreGive(s_lock);
+    fired_save();
+}
+
+esp_err_t automations_weather_run_slot(int slot)
+{
+    if (slot < 0 || slot >= SETTINGS_WEATHER_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    job_t job = { .type = JOB_WEATHER_SLOT, .slot = slot };
+    return xQueueSend(s_jobs, &job, 0) == pdTRUE ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t automations_weather_print_now(weather_kind_t kind)
@@ -180,6 +321,15 @@ esp_err_t automations_start(void)
         return ESP_ERR_NO_MEM;
     }
     s_weather.locating = true;   // the task's first job is to look up a saved ZIP code's town
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        fired_t saved;
+        size_t n = sizeof(saved);
+        if (nvs_get_blob(h, "wx_fired", &saved, &n) == ESP_OK && n == sizeof(saved)) {
+            s_fired = saved;
+        }
+        nvs_close(h);
+    }
     if (xTaskCreate(automations_task, "automations", TASK_STACK, NULL, TASK_PRIORITY, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

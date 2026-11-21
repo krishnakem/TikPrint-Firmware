@@ -24,6 +24,21 @@ static SemaphoreHandle_t s_lock;
 static settings_t s_now = { .location = "", .show_location = true, .show_date = true, .show_time = true,
                             .header_font = DEFAULT_HEADER_FONT };
 static char s_weather_zip[SETTINGS_ZIP_MAX] = "";
+/* The weather schedule. Until it is changed: on, at 7:30 AM, 12:30 PM and 8:30 PM. */
+static settings_weather_schedule_t s_weather_schedule = {
+    .on = true,
+    .slot = { { 7 * 60 + 30, true }, { 12 * 60 + 30, true }, { 20 * 60 + 30, true } },
+};
+
+static bool schedule_is_valid(const settings_weather_schedule_t *s)
+{
+    for (int i = 0; i < SETTINGS_WEATHER_SLOTS; i++) {
+        if (s->slot[i].minute >= 24 * 60) {
+            return false;
+        }
+    }
+    return true;
+}
 
 /* Read one on/off setting, leaving *value alone if it was never saved. */
 static void load_flag(nvs_handle_t h, const char *key, bool *value)
@@ -125,12 +140,51 @@ esp_err_t settings_init(void)
         if (nvs_get_str(h, "wx_zip", zip, &n) == ESP_OK) {
             strlcpy(s_weather_zip, zip, sizeof(s_weather_zip));
         }
+        settings_weather_schedule_t sched;
+        n = sizeof(sched);
+        if (nvs_get_blob(h, "wx_sched", &sched, &n) == ESP_OK && n == sizeof(sched) && schedule_is_valid(&sched)) {
+            s_weather_schedule = sched;
+        }
         nvs_close(h);
     }
     return ESP_OK;
 }
 
 /* ---------- Automations: weather ---------- */
+
+void settings_get_weather_schedule(settings_weather_schedule_t *out)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *out = s_weather_schedule;
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t settings_set_weather_schedule(const settings_weather_schedule_t *in)
+{
+    if (!schedule_is_valid(in)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    settings_weather_schedule_t clean;   // built field by field so the saved block has no stray bytes
+    memset(&clean, 0, sizeof(clean));
+    clean.on = in->on;
+    for (int i = 0; i < SETTINGS_WEATHER_SLOTS; i++) {
+        clean.slot[i].minute = in->slot[i].minute;
+        clean.slot[i].on = in->slot[i].on;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_weather_schedule = clean;
+    xSemaphoreGive(s_lock);
+
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "could not save the weather schedule");
+        return ESP_OK;   // it still applies until the next restart
+    }
+    nvs_set_blob(h, "wx_sched", &clean, sizeof(clean));
+    nvs_commit(h);
+    nvs_close(h);
+    return ESP_OK;
+}
 
 void settings_get_weather_zip(char out[SETTINGS_ZIP_MAX])
 {
