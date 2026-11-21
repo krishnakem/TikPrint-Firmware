@@ -142,12 +142,27 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .wxhead .back:hover{color:var(--ink)}
 .wxhead .ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:700 11px var(--sans);color:#fff;background:#f5a623}
 .wxhead .sw{margin-left:auto}
-.wxpad{padding:10px 12px;display:flex;flex-direction:column;gap:10px}
+.wxpad{padding:10px 12px}
 .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{flex:1;padding:6px 6px;font-size:13px;color:var(--muted);white-space:nowrap}
 .seg button+button{border-left:1px solid var(--line)}
 .seg button.on{background:var(--btn);color:var(--btn-ink)}
-.wxbtn{height:36px;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600}
+.wxbtn{height:34px;padding:0 14px;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;white-space:nowrap}
+.wxrow{display:flex;gap:8px;align-items:center}
+.wxrow select{flex:1;min-width:0;height:34px}
+.menu select{background:transparent;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:13px;color:var(--ink);color-scheme:light dark}
+.seg.sml{width:120px}
+.seg.off{opacity:.4;pointer-events:none}
+/* Places: a list to pick from, a box to add one, and towns suggested while typing (also under Settings > Location) */
+.rad{appearance:none;-webkit-appearance:none;width:16px;height:16px;border-radius:50%;border:1.5px solid var(--muted);margin:0;flex:none;cursor:pointer}
+.rad:checked{border:5px solid var(--ink)}
+.kv .wxl small{display:block;font:12px var(--mono);color:var(--muted)}
+.kv .rm{color:var(--muted);font-size:14px;padding:2px 6px;border-radius:6px}
+.kv .rm:hover{color:var(--ink);background:var(--hover)}
+.kv input[type=text].add{width:100%;text-align:left;font:14px var(--sans);margin:-5px -7px}
+.matches button{display:flex;width:100%;justify-content:space-between;padding:8px 12px;font-size:14px;text-align:left;border-top:1px solid var(--line)}
+.matches button:hover,.matches button.first{background:var(--hover)}
+.matches button span{color:var(--muted);font:12px var(--mono)}
 .wxbtn:disabled{opacity:.5;cursor:default}
 .kv .wxl{display:flex;align-items:center;gap:10px}
 .kv .wxl span:last-child,.kv span.ink:first-child{color:var(--ink);font:14px var(--sans);white-space:nowrap}
@@ -289,7 +304,8 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     </div>
     <h3>Ticket header</h3>
     <div class="grp">
-      <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" placeholder="ZIP code" aria-label="Location: type a ZIP code"><span class="say" id="locBusy" hidden><span class="spin"></span><span id="locBusyText"></span></span></div>
+      <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" placeholder="ZIP code or city" aria-label="Location: type a ZIP code or a city"><span class="say" id="locBusy" hidden><span class="spin"></span><span id="locBusyText"></span></span></div>
+      <div class="matches" id="locMatches"></div>
       <div class="locnote" id="locNote" role="status" hidden></div>
       <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
       <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
@@ -365,20 +381,34 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
         <!-- Weather: print now, and when it prints by itself -->
         <div id="wxPanel" hidden>
           <div class="wxhead"><button class="back" id="wxBack" aria-label="Back to connectors">‹</button><span class="ico">☀</span>Weather<input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
-          <div class="grp wxpad">
-            <div class="seg" id="wxKind" role="group" aria-label="What to print">
-              <button data-k="today" class="on">Today</button><button data-k="rest">Rest of today</button><button data-k="tomorrow">Tomorrow</button>
-            </div>
+          <div class="grp wxpad"><div class="wxrow">
+            <select id="wxKind" aria-label="Which forecast to print">
+              <option value="today">Today</option><option value="rest">Rest of today</option><option value="tomorrow">Tomorrow</option>
+            </select>
             <button class="wxbtn" id="wxPrint">Print now</button>
+          </div></div>
+          <h3>Places</h3>
+          <div class="grp">
+            <div id="wxPlaceList"></div>
+            <div class="kv" id="wxAddRow"><input type="text" class="add" id="wxAdd" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Add a ZIP code or city" aria-label="Add a place: type a ZIP code or a city"></div>
+            <div class="matches" id="wxMatches"></div>
+            <div class="locnote" id="wxPlaceNote" role="status" hidden></div>
           </div>
-          <h3>Place</h3>
-          <div class="grp"><div class="kv"><span class="ink" id="wxPlace"></span><span class="say">Settings › Location</span></div></div>
           <h3>Schedule</h3>
           <div class="grp">
             <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
             <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
             <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
             <div class="locnote">Up to 3 scheduled prints a day. <button id="wxPro">Upgrade to Pro</button> for more.</div>
+          </div>
+          <h3>Ticket look</h3>
+          <div class="grp">
+            <div class="kv"><span>Font</span>
+              <select id="wxFont" aria-label="Font of weather tickets">
+                <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Printer default</option>
+              </select></div>
+            <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
+            <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
           </div>
         </div>
       </div>
@@ -616,22 +646,45 @@ async function saveSettings(change){
 $('swLoc').onchange=e=>saveSettings({show_location:e.target.checked});
 $('swDate').onchange=e=>saveSettings({show_date:e.target.checked});
 $('swTime').onchange=e=>saveSettings({show_time:e.target.checked});
-/* The Location box. Five digits = a ZIP code: the board looks it up, and the box then shows its town.
-   Anything else is shown on the header as typed. Emptied, it goes back to the ZIP code's town. */
-async function saveZip(z){
+/* The Location box. Five digits = a ZIP code; a town name = that town (towns are suggested while
+   typing; click one, or type its whole name and press Enter). Either becomes the selected weather
+   place, and the box then shows its name. Any other text is shown on the header as typed.
+   Emptied, it goes back to the place's name. */
+async function savePlace(change){
   savingSettings++;
-  let r=null; try{r=await api('/api/automations/weather',{zip:z})}catch(e){}
+  let r=null; try{r=await api('/api/automations/weather',change)}catch(e){}
   savingSettings--;
-  if(r&&r.error==='bad_zip'){zipBad=z;showLocState();$('setLoc').focus();return}   // nothing saved: the box keeps what was typed, to correct it
-  if(!r||!r.ok){toast((r&&r.message)||'Couldn’t save the ZIP code');$('setLoc').value=locBoxText();return}
-  zipCity=''; zip=z; $('setLoc').value=z;   // the ZIP code shows until the board has found its town
+  if(r&&r.error==='bad_zip'){zipBad=change.zip;showLocState();$('setLoc').focus();return}   // nothing saved: the box keeps what was typed, to correct it
+  if(!r||!r.ok){toast((r&&r.message)||'Couldn’t save the place');$('setLoc').value=locBoxText();return}
+  zipCity=''; zip=change.zip||''; $('setLoc').value=change.zip||change.city;   // shown until the board has answered
   showZipPlace(r.automations);
   if(savedLoc)saveSettings({location:''}); else showHeader();
+  $('setLoc').value=locBoxText();
 }
-$('setLoc').onchange=e=>{
+/* Towns for what is typed in a box, from the table on the board: ["Austin, TX", ...], biggest first. */
+async function findTowns(q){
+  q=q.trim(); if(q.length<2||/^\d/.test(q))return [];
+  let r=null; try{r=await api('/api/automations/places/search',{q})}catch(e){}
+  return r&&r.matches?r.matches.map(m=>m.name):[];
+}
+/* Suggest towns under a box while typing. pick(name) is called when one is clicked.
+   enterTakesFirst: mark the first one as what Enter will take. */
+function suggestTowns(box,list,pick,enterTakesFirst){
+  let turn=0;
+  const show=names=>{list.innerHTML=names.map((n,i)=>`<button type="button" class="${i||!enterTakesFirst?'':'first'}" data-n="${esc(n)}">${esc(n)}<span>${i||!enterTakesFirst?'':'↵'}</span></button>`).join('')};
+  box.addEventListener('input',async()=>{const mine=++turn, names=await findTowns(box.value); if(mine===turn&&document.activeElement===box)show(names)});
+  box.addEventListener('blur',()=>{turn++;show([])});
+  list.addEventListener('mousedown',e=>e.preventDefault());   // keep the box focused, so a click is not also a "done typing"
+  list.addEventListener('click',e=>{const b=e.target.closest('button'); if(!b)return; turn++; show([]); pick(b.dataset.n)});
+}
+suggestTowns($('setLoc'),$('locMatches'),name=>{$('setLoc').value=name;$('setLoc').blur();savePlace({city:name})});
+$('setLoc').onchange=async e=>{
   const v=e.target.value.trim();
-  if(/^\d{5}$/.test(v))return saveZip(v);
+  if(/^\d{5}$/.test(v))return savePlace({zip:v});
   if(/^\d+$/.test(v)){toast('A ZIP code has five digits');e.target.value=locBoxText();return}
+  // A town's whole name ("austin" or "Austin, TX") is a place; anything else is the header's own text.
+  const low=v.toLowerCase(), town=v&&v!==zipCity?(await findTowns(v)).find(n=>n.toLowerCase()===low||n.split(',')[0].toLowerCase()===low):null;
+  if(town)return savePlace({city:town});
   saveSettings({location:typedLoc(v,'')}).then(()=>{if(document.activeElement!==e.target)e.target.value=locBoxText()});
 };
 $('setLoc').oninput=e=>{zipBad='';showLocState();hdr={...hdr,location:typedLoc(e.target.value.trim(),savedLoc)};showHeader()};   // live preview while typing (not of a ZIP code)
@@ -1226,30 +1279,49 @@ $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.rem
 
 /* ---------- Connectors ---------- */
 /* Weather is the one connector so far. Clicking it opens its panel in the menu: "Print now" for
-   today, the rest of today or tomorrow, and the schedule (three times a day, each with a switch;
-   the switch at the top is for the whole schedule). The board fetches the forecast from the
+   today, the rest of today or tomorrow; the places (one is selected: tickets are for it, and it is
+   the header's location); the schedule (three times a day, each with a switch; the switch at the top
+   is for the whole schedule); and the font and size the ticket is drawn in. The board fetches the forecast from the
    National Weather Service and prints it itself: nothing is put on the ticket here.
    The schedule lives on the board (POST /api/automations/weather), so it runs with no page open. */
 function showConnView(weather){
   $('connList').hidden=weather; $('wxPanel').hidden=!weather; $('connMenu').classList.toggle('wide',weather);
 }
-let wxSaving=0, wxKind='today', weatherBusy=false;
-/* From /api/status ("automations": "weather"): the place and the schedule. */
+let wxSaving=0, weatherBusy=false, wxPlacesShown='';
+/* From /api/status ("automations": "weather"): the places, the schedule and the look. */
 function showWeatherPanel(w){
   const sch=w.schedule; if(!sch)return;
-  const n=sch.slots.filter(x=>x.on).length, where=(w.place||w.zip||'').split(',')[0];
-  $('connWx').textContent=!w.zip?'Set up ›':`${where} · ${sch.on&&n?n+' a day':'off'} ›`;
-  $('wxPlace').textContent=w.place||w.zip||'No ZIP code yet';
+  const places=w.places||[], n=sch.slots.filter(x=>x.on).length, where=(w.place||w.zip||'').split(',')[0];
+  $('connWx').textContent=!places.length?'Set up ›':`${where} · ${sch.on&&n?n+' a day':'off'} ›`;
+  // The list of places (only drawn again when it changed, so a click in it is never lost)
+  const key=JSON.stringify([places,w.selected]);
+  if(key!==wxPlacesShown){
+    wxPlacesShown=key;
+    $('wxPlaceList').innerHTML=places.map((x,i)=>`<label class="kv"><span class="wxl"><input type="radio" class="rad" name="wxPl" value="${i}"${i===w.selected?' checked':''}><span>${esc(x.name||x.zip)}<small>${x.zip?esc(x.zip):'city'}</small></span></span><button type="button" class="rm" data-rm="${i}" aria-label="Remove ${esc(x.name||x.zip)}">✕</button></label>`).join('');
+    const full=places.length>=(w.max_places||5);
+    $('wxAddRow').hidden=full;
+    if(full)showPlaceNote(`${places.length} places saved. Remove one to add another.`); else if($('wxPlaceNote').dataset.full)showPlaceNote('');
+    $('wxPlaceNote').dataset.full=full?'1':'';
+  }
   if(wxSaving)return;   // don't let an older status report undo a change that is on its way
   $('wxOn').checked=sch.on;
   sch.slots.forEach((x,i)=>{if(document.activeElement!==$('wxT'+i))$('wxT'+i).value=x.time; $('wxS'+i).checked=x.on});
+  if(w.look){
+    if(document.activeElement!==$('wxFont'))$('wxFont').value=w.look.font;
+    [...$('wxSize').children].forEach(c=>c.classList.toggle('on',+c.dataset.s===w.look.size));
+    $('wxSize').classList.toggle('off',w.look.font==='Printer');   // the printer's own font has one size
+    $('wxHours').checked=w.look.hours;
+  }
 }
-async function saveWeather(change){
+function showPlaceNote(text,bad){$('wxPlaceNote').textContent=text;$('wxPlaceNote').hidden=!text;$('wxPlaceNote').classList.toggle('bad',!!bad)}
+/* Send a change to the weather settings. Returns the board's reply (null if it could not be reached). */
+async function saveWeather(change,quiet){
   wxSaving++;
   let r=null; try{r=await api('/api/automations/weather',change)}catch(e){}
   wxSaving--;
-  if(!r||!r.ok)toast((r&&r.message)||'Couldn’t save that');
+  if((!r||!r.ok)&&!quiet)toast((r&&r.message)||'Couldn’t save that');
   if(r&&r.automations)showZipPlace(r.automations); else refreshStatus();
+  return r;
 }
 function saveWeatherSlots(){
   const slots=[0,1,2].map(i=>({time:$('wxT'+i).value,on:$('wxS'+i).checked}));
@@ -1258,19 +1330,40 @@ function saveWeatherSlots(){
 }
 $('wxOn').onchange=e=>saveWeather({on:e.target.checked});
 [0,1,2].forEach(i=>{$('wxT'+i).onchange=saveWeatherSlots; $('wxS'+i).onchange=saveWeatherSlots});
-$('wxKind').onclick=e=>{
-  const b=e.target.closest('button'); if(!b)return;
-  wxKind=b.dataset.k; [...$('wxKind').children].forEach(c=>c.classList.toggle('on',c===b));
+$('wxFont').onchange=e=>saveWeather({font:e.target.value});
+$('wxSize').onclick=e=>{const b=e.target.closest('button'); if(b)saveWeather({size:+b.dataset.s})};
+$('wxHours').onchange=e=>saveWeather({hours:e.target.checked});
+/* Places: pick one, remove one, add one by ZIP code or by town. */
+async function changePlaces(change,what){
+  showPlaceNote('');
+  const r=await saveWeather(change,true);
+  if(r&&r.ok){if(savedLoc)saveSettings({location:''}); return true}   // the header follows the place again
+  showPlaceNote(!r?'Can’t reach the printer.':r.error==='bad_zip'?`${what} is not a US ZIP code.`:r.error==='bad_city'?`No town called “${what}” found.`:r.message+'.',true);
+  return false;
+}
+$('wxPlaceList').addEventListener('change',e=>{if(e.target.name==='wxPl')changePlaces({select:+e.target.value})});
+$('wxPlaceList').addEventListener('click',e=>{const b=e.target.closest('.rm'); if(b){e.preventDefault();changePlaces({remove:+b.dataset.rm})}});
+async function addPlace(change,what){if(await changePlaces(change,what))$('wxAdd').value=''}
+suggestTowns($('wxAdd'),$('wxMatches'),name=>addPlace({city:name},name),true);
+$('wxAdd').oninput=()=>showPlaceNote($('wxPlaceNote').dataset.full?$('wxPlaceNote').textContent:'');
+$('wxAdd').onkeydown=async e=>{
+  if(e.key!=='Enter')return;
+  const v=e.target.value.trim(); if(!v)return;
+  $('wxMatches').innerHTML='';
+  if(/^\d{5}$/.test(v))return addPlace({zip:v},v);
+  if(/^\d+$/.test(v))return showPlaceNote('A ZIP code has five digits.',true);
+  const town=(await findTowns(v))[0];   // Enter takes the first town suggested
+  if(town)addPlace({city:town},town); else showPlaceNote(`No town called “${v}” found.`,true);
 };
 $('wxBack').onclick=()=>showConnView(false);
 $('wxPro').onclick=()=>toast('Pro isn’t available yet');
 $('wxPrint').onclick=printWeather;
 async function printWeather(){
   if(weatherBusy)return;
-  if(!zip){toast('Type your ZIP code in Settings › Location first');return}
-  weatherBusy=true; $('wxPrint').disabled=true; $('wxPrint').textContent='Getting the weather…';
+  if(!zip&&!zipCity){toast('Add a place first');return}
+  weatherBusy=true; $('wxPrint').disabled=true; $('wxPrint').textContent='Getting…';
   try{
-    let r=null; try{r=await api('/api/automations/weather/print-now',{kind:wxKind})}catch(e){}
+    let r=null; try{r=await api('/api/automations/weather/print-now',{kind:$('wxKind').value})}catch(e){}
     if(!r||!r.ok){toast((r&&r.message)||'Couldn’t reach the printer');return}
     // The board answers at once and fetches in the background: wait until it says how it went.
     for(let i=0;i<40;i++){

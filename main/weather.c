@@ -10,19 +10,17 @@
  *      GET .../forecast/hourly              the same, hour by hour (for the "next hours" list)
  *   3. GET /alerts/active?point=42.28,-83.74   warnings in force for that spot
  *
- * The spot comes from the ZIP code typed in the web UI, looked up in the table built into
- * the firmware (zip_table.c).
+ * The spot comes from the place chosen in the web UI: a ZIP code or a town name, looked up in
+ * the tables built into the firmware (zip_table.c, city_table.c).
  *
  * Being a good guest, as the weather service asks:
  *   - Every request says who is asking (USER_AGENT_FORMAT, with the contact from config.h).
  *   - Answers are kept and reused instead of asked for again:
  *       step 1  saved on the board (NVS namespace "weather"). It practically never changes,
- *               so it is only asked again when the ZIP code changes or step 2 fails.
+ *               so it is only asked again when the place changes or step 2 fails.
  *       step 2  kept in memory for as long as the answer itself says it is good for
  *               (its "Cache-Control: max-age=..." line, usually an hour).
  *       step 3  the same, but never longer than ALERTS_KEEP_MAX_S: warnings must be current.
- *   - Scheduled prints wait a random 0-60 seconds first (SPREAD_MAX_MS), so that thousands of
- *     printers do not all ask at exactly 7:30:00.
  *
  * All requests go over HTTPS and the weather service's certificate is checked.
  *
@@ -37,7 +35,6 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_random.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -61,7 +58,6 @@ static const char *TAG = "weather";
 #define NWS_HOST            "https://api.weather.gov"
 #define USER_AGENT_FORMAT   "TikPrint/%s (%s)"     // firmware version, APP_CONTACT
 #define HTTP_TIMEOUT_MS     15000
-#define SPREAD_MAX_MS       60000                  // scheduled prints wait a random time up to this before asking
 #define POINT_MAX_BYTES     (16 * 1024)            // biggest answer accepted for each question (usual size: 4 KB,
 #define FORECAST_MAX_BYTES  (96 * 1024)            //   13 KB, and 2-4 KB per alert). Answers are held in PSRAM.
 #define HOURLY_MAX_BYTES    (512 * 1024)           // the hourly forecast is a whole week: about 160 KB
@@ -74,10 +70,11 @@ static const char *TAG = "weather";
 #define ALERTS_KEEP_MAX_S       (15 * 60)
 #define NVS_NS              "weather"
 #define URL_MAX             160
+#define SPOT_MAX            24                     // room for a spot on the map as text, "42.28,-83.74"
 
 /* What step 1 found out about a ZIP code. Saved on the board as one block. */
 typedef struct {
-    char zip[SETTINGS_ZIP_MAX];
+    char spot[SPOT_MAX];           // which place it is about: its spot on the map, "42.28,-83.74"
     char forecast_url[URL_MAX];
     char place[WEATHER_PLACE_MAX];
 } point_t;
@@ -240,13 +237,13 @@ static weather_result_t failure(int status)
     return status == 403 ? WEATHER_REFUSED : WEATHER_UNREACHABLE;
 }
 
-static bool point_known(const char *zip)
+static bool point_known(const char *spot)
 {
-    return s_point.forecast_url[0] && strcmp(s_point.zip, zip) == 0;   // only this task changes s_point: no lock to read
+    return s_point.forecast_url[0] && strcmp(s_point.spot, spot) == 0;   // only this task changes s_point: no lock to read
 }
 
 /* Ask the weather service which forecast square the ZIP code is in, and save the answer. */
-static weather_result_t point_fetch(const char *zip, const char *spot)
+static weather_result_t point_fetch(const settings_place_t *place, const char *spot)
 {
     char url[URL_MAX], *json;
     int max_age_s;
@@ -268,20 +265,21 @@ static weather_result_t point_fetch(const char *zip, const char *spot)
     if (ok) {
         point_t p;
         memset(&p, 0, sizeof(p));
-        strlcpy(p.zip, zip, sizeof(p.zip));
+        strlcpy(p.spot, spot, sizeof(p.spot));
         strlcpy(p.forecast_url, forecast->valuestring, sizeof(p.forecast_url));
         if (cJSON_IsString(city) && cJSON_IsString(state)) {
             snprintf(p.place, sizeof(p.place), "%s, %s", city->valuestring, state->valuestring);
         } else {
-            strlcpy(p.place, zip, sizeof(p.place));
+            strlcpy(p.place, place->zip[0] ? place->zip : spot, sizeof(p.place));
         }
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_point = p;
         xSemaphoreGive(s_lock);
         point_save(&p);
-        ESP_LOGI(TAG, "ZIP code %s is %s; forecast at %s", zip, p.place, p.forecast_url);
+        settings_name_place(place, p.place);   // a place added by ZIP code gets its town's name (one added by name keeps it)
+        ESP_LOGI(TAG, "%s is %s; forecast at %s", spot, p.place, p.forecast_url);
     } else {
-        ESP_LOGW(TAG, "the answer for ZIP code %s has no forecast address", zip);
+        ESP_LOGW(TAG, "the answer for %s has no forecast address", spot);
     }
     cJSON_Delete(root);
     return ok ? WEATHER_OK : WEATHER_BAD_ANSWER;
@@ -296,59 +294,58 @@ static bool wifi_up(void)
     return w.connected;
 }
 
-/* The saved ZIP code and its spot on the map ("42.28,-83.74"). False if there is none. */
-static bool saved_spot(char zip[SETTINGS_ZIP_MAX], char *spot, size_t spot_size)
+/* The selected place and its spot on the map ("42.28,-83.74"). False if no place has been added. */
+static bool saved_spot(settings_place_t *place, char *spot, size_t spot_size)
 {
-    int lat_e2, lon_e2;
-    settings_get_weather_zip(zip);
-    if (!zip_table_lookup(zip, &lat_e2, &lon_e2)) {
+    if (!settings_get_place(place)) {
         return false;
     }
-    format_spot(spot, spot_size, lat_e2, lon_e2);
+    format_spot(spot, spot_size, place->lat_e2, place->lon_e2);
     return true;
 }
 
 weather_result_t weather_locate(void)
 {
-    char zip[SETTINGS_ZIP_MAX], spot[32];
-    if (!saved_spot(zip, spot, sizeof(spot))) {
+    settings_place_t place;
+    char spot[SPOT_MAX];
+    if (!saved_spot(&place, spot, sizeof(spot))) {
         return WEATHER_NO_ZIP;
     }
-    if (point_known(zip)) {
+    if (point_known(spot)) {
+        settings_name_place(&place, s_point.place);   // in case the place was added again after being removed
         return WEATHER_OK;
     }
-    return wifi_up() ? point_fetch(zip, spot) : WEATHER_NO_WIFI;
+    return wifi_up() ? point_fetch(&place, spot) : WEATHER_NO_WIFI;
 }
 
-weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char *source, char *title, char *body,
-                                     weather_icon_t *icon)
+weather_result_t weather_make_ticket(weather_kind_t kind, bool show_hours, char *source, char *title, char *body,
+                                     char *rich_body, weather_icon_t *icon)
 {
     *icon = WEATHER_ICON_NONE;
-    char zip[SETTINGS_ZIP_MAX], spot[32], alerts_url[URL_MAX], hourly_url[URL_MAX + 8];
-    bool want_hourly = kind != WEATHER_TOMORROW;   // the "next hours" list is about now, not about tomorrow
+    settings_place_t place;
+    char spot[SPOT_MAX], alerts_url[URL_MAX], hourly_url[URL_MAX + 8];
+    bool want_hourly = show_hours && kind != WEATHER_TOMORROW;   // the "next hours" list is about now, not about tomorrow
     source[0] = title[0] = body[0] = 0;
-    if (!saved_spot(zip, spot, sizeof(spot))) {
+    if (rich_body) {
+        rich_body[0] = 0;
+    }
+    if (!saved_spot(&place, spot, sizeof(spot))) {
         return WEATHER_NO_ZIP;
     }
     snprintf(alerts_url, sizeof(alerts_url), NWS_HOST "/alerts/active?point=%s", spot);
 
     // Is there anything to ask the weather service, or is everything still fresh in memory?
     snprintf(hourly_url, sizeof(hourly_url), "%s/hourly", s_point.forecast_url);
-    bool must_ask = !point_known(zip) || !kept_is_fresh(&s_forecast, s_point.forecast_url) ||
+    bool must_ask = !point_known(spot) || !kept_is_fresh(&s_forecast, s_point.forecast_url) ||
                     !kept_is_fresh(&s_alerts, alerts_url) || (want_hourly && !kept_is_fresh(&s_hourly, hourly_url));
     if (must_ask && !wifi_up()) {
         return WEATHER_NO_WIFI;
     }
-    if (must_ask && spread_load) {
-        uint32_t wait_ms = esp_random() % (SPREAD_MAX_MS + 1);
-        ESP_LOGI(TAG, "waiting %u s before asking the weather service (spreads the load)", (unsigned)(wait_ms / 1000));
-        vTaskDelay(pdMS_TO_TICKS(wait_ms));
-    }
 
     // Step 1 (normally already known)
     bool point_is_new = false;
-    if (!point_known(zip)) {
-        weather_result_t res = point_fetch(zip, spot);
+    if (!point_known(spot)) {
+        weather_result_t res = point_fetch(&place, spot);
         if (res != WEATHER_OK) {
             return res;
         }
@@ -369,7 +366,7 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
             return failure(status);
         }
         ESP_LOGW(TAG, "the saved forecast address failed: looking it up again");
-        weather_result_t res = point_fetch(zip, spot);
+        weather_result_t res = point_fetch(&place, spot);
         if (res != WEATHER_OK) {
             return res;
         }
@@ -405,13 +402,20 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
     clock_status_t clk;
     clock_get_status(&clk);
     time_t now = clk.set ? time(NULL) : 0;
-    if (!weather_ticket_build(kind, s_forecast.json, want_hourly ? s_hourly.json : NULL, s_alerts.json, now, icon,
+    const char *hourly = want_hourly ? s_hourly.json : NULL;
+    if (rich_body) {   // the same ticket once more, in the form for drawing it in a chosen font
+        weather_ticket_build(kind, s_forecast.json, hourly, s_alerts.json, now, true, icon, title, WEATHER_TITLE_MAX,
+                             rich_body, WEATHER_BODY_MAX);
+    }
+    if (!weather_ticket_build(kind, s_forecast.json, hourly, s_alerts.json, now, false, icon,
                               title, WEATHER_TITLE_MAX, body, WEATHER_BODY_MAX)) {
         ESP_LOGW(TAG, "the forecast could not be read");
         kept_drop(&s_forecast);   // do not reuse an answer we cannot read
         return WEATHER_BAD_ANSWER;
     }
-    snprintf(source, WEATHER_SOURCE_MAX, "WEATHER \xC2\xB7 %s", s_point.place);   // \xC2\xB7 = the middle dot
+    char name[WEATHER_PLACE_MAX];
+    weather_get_place(name, sizeof(name));
+    snprintf(source, WEATHER_SOURCE_MAX, "WEATHER \xC2\xB7 %s", name[0] ? name : s_point.place);   // \xC2\xB7 = the middle dot
     for (char *p = source; *p; p++) {
         *p = (*p >= 'a' && *p <= 'z') ? (char)(*p - 'a' + 'A') : *p;
     }
@@ -420,11 +424,8 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
 
 void weather_get_place(char *out, size_t size)
 {
-    char zip[SETTINGS_ZIP_MAX];
-    settings_get_weather_zip(zip);
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    strlcpy(out, zip[0] && strcmp(s_point.zip, zip) == 0 ? s_point.place : "", size);
-    xSemaphoreGive(s_lock);
+    settings_place_t place;
+    strlcpy(out, settings_get_place(&place) ? place.name : "", size);
 }
 
 const char *weather_result_name(weather_result_t result)
@@ -443,7 +444,7 @@ const char *weather_result_message(weather_result_t result)
 {
     switch (result) {
     case WEATHER_OK:          return "";
-    case WEATHER_NO_ZIP:      return "Set a ZIP code for the weather first";
+    case WEATHER_NO_ZIP:      return "Add a place for the weather first";
     case WEATHER_NO_WIFI:     return "The printer is not on Wi-Fi, so it cannot get the weather";
     case WEATHER_UNREACHABLE: return "The National Weather Service did not answer. Try again in a minute";
     case WEATHER_REFUSED:     return "The National Weather Service refused the request (403)";
@@ -464,7 +465,7 @@ esp_err_t weather_init(void)
         point_t p;
         size_t n = sizeof(p);
         if (nvs_get_blob(h, "point", &p, &n) == ESP_OK && n == sizeof(p)) {
-            p.zip[sizeof(p.zip) - 1] = p.forecast_url[sizeof(p.forecast_url) - 1] = p.place[sizeof(p.place) - 1] = 0;
+            p.spot[sizeof(p.spot) - 1] = p.forecast_url[sizeof(p.forecast_url) - 1] = p.place[sizeof(p.place) - 1] = 0;
             s_point = p;
         }
         nvs_close(h);

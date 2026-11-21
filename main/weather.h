@@ -12,7 +12,7 @@
 /** How getting the weather went. */
 typedef enum {
     WEATHER_OK = 0,
-    WEATHER_NO_ZIP,        // no ZIP code has been set (or it is not in the table)
+    WEATHER_NO_ZIP,        // no place has been added yet
     WEATHER_NO_WIFI,       // the board is not on Wi-Fi, so it cannot reach the weather service
     WEATHER_UNREACHABLE,   // the weather service did not answer, or answered with an error
     WEATHER_REFUSED,       // it answered "403 Access Denied": it does not accept this app's requests (see APP_CONTACT)
@@ -27,22 +27,23 @@ esp_err_t weather_init(void);
  * Service (api.weather.gov) unless a fresh enough answer is still in memory, so it can take
  * several seconds and needs a deep stack: call it from the automations task only.
  *
- *   spread_load   wait a random 0-60 seconds first. For scheduled prints, so that all
- *                 printers do not ask the weather service in the very same second.
+ *   show_hours    include the hour-by-hour list (on "today" and "rest of today" tickets)
  *   source        gets "WEATHER · ANN ARBOR, MI"   (room for WEATHER_SOURCE_MAX)
  *   title, body   see weather_ticket.h             (room for WEATHER_TITLE_MAX / WEATHER_BODY_MAX)
+ *   rich_body     NULL, or gets the body once more in the "rich" form for drawing it in a chosen font
+ *                 (weather_ticket.h; room for WEATHER_BODY_MAX)
  *   icon          gets the symbol to print at the top (see weather_icons.h), or WEATHER_ICON_NONE
  */
-weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char *source, char *title, char *body,
-                                     weather_icon_t *icon);
+weather_result_t weather_make_ticket(weather_kind_t kind, bool show_hours, char *source, char *title, char *body,
+                                     char *rich_body, weather_icon_t *icon);
 
 /**
- * Find out where the saved ZIP code is (place name and forecast address), if not known yet.
+ * Find out the forecast address (and for a ZIP code, the town) of the selected place, if not known yet.
  * Same rules as above: automations task only.
  */
 weather_result_t weather_locate(void);
 
-/** The place the saved ZIP code is in, e.g. "Ann Arbor, MI". "" until the weather service has been asked once.
+/** The selected place, e.g. "Ann Arbor, MI". "" if there is none, or for a ZIP code whose town is not known yet.
  *  Also the ticket header's location when none is typed in. */
 void weather_get_place(char *out, size_t size);
 

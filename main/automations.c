@@ -27,7 +27,9 @@
 #include "clock.h"
 #include "printer.h"
 #include "settings.h"
+#include "ticket_draw.h"
 #include "weather_icons.h"
+#include "weather_render.h"
 
 static const char *TAG = "automations";
 
@@ -90,32 +92,53 @@ static void weather_finished(bool manual, bool ok, const char *error, const char
     }
 }
 
-static print_result_t weather_print(weather_kind_t kind, bool spread_load, bool manual)
+/* Fetch the weather and put a ticket in the print queue.
+ *
+ * The ticket is drawn here, as dots, in the font chosen on the page (weather_render.c). If
+ * that font is "Printer" (or the drawing cannot be done), the printer's own built-in font
+ * prints the text instead, with the symbol as a small picture above the title. */
+static print_result_t weather_print(weather_kind_t kind, bool manual)
 {
     print_result_t result = PRINT_FAILED;
+    settings_weather_look_t look;
+    settings_t header;
+    settings_get_weather_look(&look);
+    settings_get(&header);
+    int font = ticket_font_id(look.font);
+    int header_font = ticket_font_id(header.header_font);
+
     // The text is built in PSRAM (the big external RAM); the print queue then takes its own copy.
     char source[WEATHER_SOURCE_MAX], title[WEATHER_TITLE_MAX];
     char *body = heap_caps_malloc(WEATHER_BODY_MAX, MALLOC_CAP_SPIRAM);
+    char *rich = heap_caps_malloc(WEATHER_BODY_MAX, MALLOC_CAP_SPIRAM);
     uint8_t *strip = heap_caps_malloc(WEATHER_ICON_STRIP_BYTES, MALLOC_CAP_SPIRAM);   // the weather symbol, as an image
+    ticket_canvas_t canvas = { 0 };
     weather_icon_t icon;
-    if (!body || !strip) {
+    if (!body || !rich || !strip) {
         free(body);
+        free(rich);
         free(strip);
         weather_finished(manual, false, "no_memory", "The printer is out of memory", 0);
         return PRINT_TRY_LATER;
     }
     ESP_LOGI(TAG, "making a weather ticket (%s)", weather_kind_name(kind));
-    weather_result_t res = weather_make_ticket(kind, spread_load, source, title, body, &icon);
+    weather_result_t res = weather_make_ticket(kind, look.hours, source, title, body, rich, &icon);
     if (res != WEATHER_OK) {
         weather_finished(manual, false, weather_result_name(res), weather_result_message(res), 0);
         result = (res == WEATHER_NO_WIFI || res == WEATHER_UNREACHABLE) ? PRINT_TRY_LATER : PRINT_FAILED;
     } else {
         printer_job_t job = { .title = title, .body = body, .source = source };
-        if (icon != WEATHER_ICON_NONE) {
+        bool drawn = font >= 0 && ticket_canvas_init(&canvas, WEATHER_RENDER_MAX_ROWS) &&
+                     weather_render(&canvas, font, look.size, header_font >= 0 ? header_font : font, source, icon, title, rich);
+        if (drawn) {
+            job.image = canvas.bits;
+            job.image_rows = (uint16_t)canvas.rows;
+            job.text_in_image = true;   // header, title and text are all in the picture
+        } else if (icon != WEATHER_ICON_NONE) {
             weather_icon_strip(icon, strip);
             job.image = strip;
             job.image_rows = WEATHER_ICON_STRIP_ROWS;
-            job.image_first = true;   // above the title, not below the text
+            job.image_first = true;     // above the title, not below the text
         }
         printer_ticket_t ticket;
         if (printer_print_job(&job, &ticket) == ESP_OK) {
@@ -126,7 +149,9 @@ static print_result_t weather_print(weather_kind_t kind, bool spread_load, bool 
             result = PRINT_TRY_LATER;
         }
     }
+    ticket_canvas_free(&canvas);
     free(body);
+    free(rich);
     free(strip);
     return result;
 }
@@ -163,7 +188,6 @@ static int32_t day_number(time_t t)
 static void schedule_check(void)
 {
     static int64_t retry_at_us[SETTINGS_WEATHER_SLOTS];   // not before this (board uptime)
-    static int32_t trying_day[SETTINGS_WEATHER_SLOTS];    // the day a slot was first tried, to tell first tries from retries
 
     clock_status_t clk;
     settings_weather_schedule_t sched;
@@ -188,11 +212,8 @@ static void schedule_check(void)
         if (done || limit || esp_timer_get_time() < retry_at_us[i]) {
             continue;
         }
-        bool first_try = trying_day[i] != day;
-        trying_day[i] = day;
-        ESP_LOGI(TAG, "scheduled weather print %d (%s)%s", i + 1, weather_kind_name(SLOT_KIND[i]), first_try ? "" : ", trying again");
-        // Only the first try waits a random moment (so that not every printer asks at 7:30:00 sharp).
-        print_result_t res = weather_print(SLOT_KIND[i], first_try, false);
+        ESP_LOGI(TAG, "scheduled weather print %d (%s)", i + 1, weather_kind_name(SLOT_KIND[i]));
+        print_result_t res = weather_print(SLOT_KIND[i], false);
         if (res == PRINT_TRY_LATER && late_min < SLOT_WINDOW_MIN - 1) {
             retry_at_us[i] = esp_timer_get_time() + SLOT_RETRY_MS * 1000LL;
             continue;
@@ -245,9 +266,9 @@ static void automations_task(void *arg)
         job_t job = { .type = JOB_WEATHER_LOCATE };
         bool got_job = xQueueReceive(s_jobs, &job, pdMS_TO_TICKS(TICK_MS)) == pdTRUE;
         if (got_job && job.type == JOB_WEATHER_PRINT) {
-            weather_print(job.kind, false, true);   // asked for by a person: no random wait
+            weather_print(job.kind, true);
         } else if (got_job && job.type == JOB_WEATHER_SLOT) {
-            weather_print(SLOT_KIND[job.slot], false, false);   // a test of a scheduled print
+            weather_print(SLOT_KIND[job.slot], false);   // a test of a scheduled print
         } else if (got_job || locate_tries_left > 0) {
             locate_tries_left = locate(got_job ? LOCATE_RETRIES : locate_tries_left);   // a new ZIP code starts afresh
         }

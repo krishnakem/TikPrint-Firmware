@@ -36,7 +36,7 @@
 #include "printer.h"
 #include "clock.h"
 #include "settings.h"
-#include "weather.h"
+#include "ticket_header.h"
 
 static const char *TAG = "thermal_printer";
 
@@ -47,8 +47,6 @@ static const char *TAG = "thermal_printer";
 #define PRINTER_BAUD       115200  // must match the printer (its self-test page shows it)
 #define PRINTER_HAS_CUTTER 1       // 1 = cut the paper after each ticket
 #define FEED_LINES_AFTER   4       // blank lines after the ticket, so it clears the tear bar
-#define HEADER_DATE_FORMAT "%b %d, %Y"     // header line of built-in font tickets, e.g. "Nov 20, 2026" (strftime patterns)
-#define HEADER_TIME_FORMAT "%I:%M %p %Z"   //                                        e.g. "10:05 PM EST"
 #define HEADER_COLS        64      // characters per line in the printer's small font (9 dots each), used for that header
 
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
@@ -121,8 +119,10 @@ static void send_text_n(const char *s, size_t len)
             one[0] = (char)cp;
         } else {
             switch (cp) {
-            case 0x00B0: one[0] = (char)0xF8; break;            // degree sign (code page 437)
-            case 0x00B7: one[0] = (char)0xFA; break;            // middle dot
+            // This printer reads any byte above 127 plus the byte after it as ONE Chinese character
+            // (and no command tried switches that off), so only plain ASCII is ever sent:
+            case 0x00B0: rep = ""; break;                       // degree sign: left out ("54F")
+            case 0x00B7: one[0] = '-'; break;                   // middle dot
             case 0x2022: one[0] = '*'; break;                   // bullet
             case 0x2018: case 0x2019: one[0] = '\''; break;     // curly single quotes
             case 0x201C: case 0x201D: one[0] = '"'; break;      // curly double quotes
@@ -190,35 +190,10 @@ static void finish_ticket(void)
  */
 static void send_header(void)
 {
-    settings_t s;
-    clock_status_t c;
-    char date[24], time[24];
-    settings_get(&s);
-    clock_get_status(&c);
-    // No location typed in: use the town of the weather ZIP code, or, while there is none,
-    // the city of the timezone ("America/Los_Angeles" -> "Los Angeles")
-    char city[CLOCK_TZ_MAX] = "";
-    weather_get_place(city, sizeof(city));   // "Ann Arbor, MI"
-    const char *slash = strrchr(c.timezone, '/');
-    if (!city[0] && slash) {
-        strlcpy(city, slash + 1, sizeof(city));
-        for (char *p = city; *p; p++) {
-            *p = *p == '_' ? ' ' : *p;
-        }
-    }
-    const char *location = s.location[0] ? s.location : city;
-    bool has_date = s.show_date && clock_format_now(date, sizeof(date), HEADER_DATE_FORMAT);
-    bool has_time = s.show_time && clock_format_now(time, sizeof(time), HEADER_TIME_FORMAT);
-
     // Left half and right half, as on tickets drawn by the page:
     //   TikPrint | Ann Arbor, MI                      Nov 20, 2026 | 10:05 PM EST
-    char left[CLOCK_TZ_MAX + 16], right[56] = "";
-    snprintf(left, sizeof(left), "TikPrint%s%s", s.show_location && location[0] ? " | " : "",
-             s.show_location ? location : "");
-    if (has_date || has_time) {
-        snprintf(right, sizeof(right), "%s%s%s", has_date ? date : time, has_date && has_time ? " | " : "",
-                 has_date && has_time ? time : "");
-    }
+    char left[TICKET_HEADER_MAX], right[TICKET_HEADER_MAX];
+    ticket_header_text(left, right);
     // Count characters, not bytes: an accented letter is stored as two bytes but prints as one.
     int used = 0;
     for (const char *p = left; *p; p++) {
@@ -291,8 +266,6 @@ static void send_job(const printer_job_t *job)
 {
     CMD("\x1B@");        // ESC @: reset the printer to its defaults
     CMD("\x1Bt\x00");    // ESC t 0: code page 437 (matches send_text above)
-    CMD("\x1C.");        // FS .: leave Chinese-character mode. In it the printer reads the degree sign plus the
-                         //   next letter as ONE Chinese character ("54" + a Chinese sign in place of the degree sign and F).
 
     if (job->layout && job->layout_len) {
         send_layout(job);
