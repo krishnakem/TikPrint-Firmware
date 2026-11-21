@@ -30,8 +30,10 @@ esp_err_t weather_init(void);
  *                 printers do not ask the weather service in the very same second.
  *   source        gets "WEATHER · ANN ARBOR, MI"   (room for WEATHER_SOURCE_MAX)
  *   title, body   see weather_ticket.h             (room for WEATHER_TITLE_MAX / WEATHER_BODY_MAX)
+ *   icon          gets the symbol to print at the top (see weather_icons.h), or WEATHER_ICON_NONE
  */
-weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char *source, char *title, char *body);
+weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char *source, char *title, char *body,
+                                     weather_icon_t *icon);
 
 /**
  * Find out where the saved ZIP code is (place name and forecast address), if not known yet.

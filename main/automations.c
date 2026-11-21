@@ -22,6 +22,7 @@
 
 #include "automations.h"
 #include "printer.h"
+#include "weather_icons.h"
 
 static const char *TAG = "automations";
 
@@ -66,16 +67,26 @@ static void weather_print(weather_kind_t kind, bool spread_load)
     // The text is built in PSRAM (the big external RAM); the print queue then takes its own copy.
     char source[WEATHER_SOURCE_MAX], title[WEATHER_TITLE_MAX];
     char *body = heap_caps_malloc(WEATHER_BODY_MAX, MALLOC_CAP_SPIRAM);
-    if (!body) {
+    uint8_t *strip = heap_caps_malloc(WEATHER_ICON_STRIP_BYTES, MALLOC_CAP_SPIRAM);   // the weather symbol, as an image
+    weather_icon_t icon;
+    if (!body || !strip) {
+        free(body);
+        free(strip);
         weather_finished(false, "no_memory", "The printer is out of memory", 0);
         return;
     }
     ESP_LOGI(TAG, "making a weather ticket (%s)", weather_kind_name(kind));
-    weather_result_t res = weather_make_ticket(kind, spread_load, source, title, body);
+    weather_result_t res = weather_make_ticket(kind, spread_load, source, title, body, &icon);
     if (res != WEATHER_OK) {
         weather_finished(false, weather_result_name(res), weather_result_message(res), 0);
     } else {
         printer_job_t job = { .title = title, .body = body, .source = source };
+        if (icon != WEATHER_ICON_NONE) {
+            weather_icon_strip(icon, strip);
+            job.image = strip;
+            job.image_rows = WEATHER_ICON_STRIP_ROWS;
+            job.image_first = true;   // above the title, not below the text
+        }
         printer_ticket_t ticket;
         if (printer_print_job(&job, &ticket) == ESP_OK) {
             weather_finished(true, "", "", ticket.number);
@@ -84,6 +95,7 @@ static void weather_print(weather_kind_t kind, bool spread_load)
         }
     }
     free(body);
+    free(strip);
 }
 
 static void automations_task(void *arg)

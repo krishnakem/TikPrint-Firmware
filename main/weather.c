@@ -7,6 +7,7 @@
  *   1. GET /points/42.28,-83.74             "which forecast square is this spot in?"
  *        -> the address of that square's forecast, and the name of the nearest town
  *   2. GET /gridpoints/DTX/47,35/forecast   the forecast itself (the address from step 1)
+ *      GET .../forecast/hourly              the same, hour by hour (for the "next hours" list)
  *   3. GET /alerts/active?point=42.28,-83.74   warnings in force for that spot
  *
  * The spot comes from the ZIP code typed in the web UI, looked up in the table built into
@@ -32,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -46,6 +48,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
+#include "clock.h"
 #include "config.h"
 #include "settings.h"
 #include "weather.h"
@@ -61,6 +64,7 @@ static const char *TAG = "weather";
 #define SPREAD_MAX_MS       60000                  // scheduled prints wait a random time up to this before asking
 #define POINT_MAX_BYTES     (16 * 1024)            // biggest answer accepted for each question (usual size: 4 KB,
 #define FORECAST_MAX_BYTES  (96 * 1024)            //   13 KB, and 2-4 KB per alert). Answers are held in PSRAM.
+#define HOURLY_MAX_BYTES    (512 * 1024)           // the hourly forecast is a whole week: about 160 KB
 #define ALERTS_MAX_BYTES    (256 * 1024)
 #define FORECAST_KEEP_DEFAULT_S (30 * 60)          // how long to reuse a forecast that does not say how long it is good for
 #define FORECAST_KEEP_MIN_S     (5 * 60)           // ... and the limits on what it may say
@@ -87,7 +91,7 @@ typedef struct {
 
 static SemaphoreHandle_t s_lock;   // guards s_point
 static point_t s_point;
-static kept_t s_forecast, s_alerts;
+static kept_t s_forecast, s_hourly, s_alerts;
 static char s_user_agent[96];
 
 /* ---------- One HTTPS request ---------- */
@@ -309,9 +313,12 @@ weather_result_t weather_locate(void)
     return wifi_up() ? point_fetch(zip, spot) : WEATHER_NO_WIFI;
 }
 
-weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char *source, char *title, char *body)
+weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char *source, char *title, char *body,
+                                     weather_icon_t *icon)
 {
-    char zip[SETTINGS_ZIP_MAX], spot[32], alerts_url[URL_MAX];
+    *icon = WEATHER_ICON_NONE;
+    char zip[SETTINGS_ZIP_MAX], spot[32], alerts_url[URL_MAX], hourly_url[URL_MAX + 8];
+    bool want_hourly = kind != WEATHER_TOMORROW;   // the "next hours" list is about now, not about tomorrow
     source[0] = title[0] = body[0] = 0;
     if (!saved_spot(zip, spot, sizeof(spot))) {
         return WEATHER_NO_ZIP;
@@ -319,8 +326,9 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
     snprintf(alerts_url, sizeof(alerts_url), NWS_HOST "/alerts/active?point=%s", spot);
 
     // Is there anything to ask the weather service, or is everything still fresh in memory?
+    snprintf(hourly_url, sizeof(hourly_url), "%s/hourly", s_point.forecast_url);
     bool must_ask = !point_known(zip) || !kept_is_fresh(&s_forecast, s_point.forecast_url) ||
-                    !kept_is_fresh(&s_alerts, alerts_url);
+                    !kept_is_fresh(&s_alerts, alerts_url) || (want_hourly && !kept_is_fresh(&s_hourly, hourly_url));
     if (must_ask && !wifi_up()) {
         return WEATHER_NO_WIFI;
     }
@@ -361,6 +369,19 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
         point_is_new = true;
     }
 
+    // The hour-by-hour forecast lives next to the forecast. Without it the ticket still prints (without that list).
+    snprintf(hourly_url, sizeof(hourly_url), "%s/hourly", s_point.forecast_url);   // again: step 1 may have changed the address
+    if (want_hourly && !kept_is_fresh(&s_hourly, hourly_url)) {
+        char *json;
+        int max_age_s;
+        kept_drop(&s_hourly);
+        if (nws_get(hourly_url, HOURLY_MAX_BYTES, &json, &max_age_s) == 200) {
+            kept_store(&s_hourly, hourly_url, json, max_age_s, FORECAST_KEEP_DEFAULT_S, FORECAST_KEEP_MIN_S, FORECAST_KEEP_MAX_S);
+        } else {
+            ESP_LOGW(TAG, "no hourly forecast: printing without the next hours");
+        }
+    }
+
     // Step 3. If the alerts cannot be had, the forecast still prints (without them).
     if (!kept_is_fresh(&s_alerts, alerts_url)) {
         char *json;
@@ -373,7 +394,12 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
         }
     }
 
-    if (!weather_ticket_build(kind, s_forecast.json, s_alerts.json, title, WEATHER_TITLE_MAX, body, WEATHER_BODY_MAX)) {
+    // The time now, so hours and parts of the day that are already over are left out.
+    clock_status_t clk;
+    clock_get_status(&clk);
+    time_t now = clk.set ? time(NULL) : 0;
+    if (!weather_ticket_build(kind, s_forecast.json, want_hourly ? s_hourly.json : NULL, s_alerts.json, now, icon,
+                              title, WEATHER_TITLE_MAX, body, WEATHER_BODY_MAX)) {
         ESP_LOGW(TAG, "the forecast could not be read");
         kept_drop(&s_forecast);   // do not reuse an answer we cannot read
         return WEATHER_BAD_ANSWER;

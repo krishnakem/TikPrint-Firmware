@@ -301,11 +301,15 @@ static void send_job(const printer_job_t *job)
     // Normally the page has drawn the text into the image, in the font picked there.
     // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl),
     // or for lines set in the page's "Printer default" font (send_layout above).
+    bool image_on_top = job->image && job->image_rows && job->image_first && !job->text_in_image;
     if (!job->text_in_image) {
         send_header();
         if (job->source[0]) {   // the ticket number is not printed
             send_text(job->source);
             send_text("\n");
+        }
+        if (image_on_top) {     // e.g. the weather symbol: between the source line and the title
+            send_image(job->image, job->image_rows);
         }
 
         if (job->title[0]) {
@@ -319,7 +323,7 @@ static void send_job(const printer_job_t *job)
             send_text("\n");
         }
     }
-    if (job->image && job->image_rows) {
+    if (job->image && job->image_rows && !image_on_top) {
         send_image(job->image, job->image_rows);
         send_footer();
     }
