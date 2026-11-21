@@ -4,7 +4,7 @@ Firmware for the Waveshare ESP32-S3 board (32 MB flash, 16 MB PSRAM).
 Plug the board into a computer with USB-C and it appears as a small network.
 The web UI is at **http://tikprint.local** (or **http://192.168.7.1** if the name does not resolve).
 
-Status: **Milestone 4** (Print works end to end with a fake printer that writes tickets to the log; Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi).
+Status: **Milestone 5** (tickets print on the real thermal printer. Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi).
 
 ## The one USB-C port is two devices
 
@@ -71,13 +71,37 @@ curl -X POST http://tikprint.local/api/wifi/forget
 curl http://tikprint.local/api/last-ticket          # the last ticket the printer received
 open http://tikprint.local/api/last-ticket.pbm      # its image, exactly as the printer got it
 curl "http://tikprint.local/api/diag/ping?ip=1.1.1.1"   # make the board ping something (troubleshooting)
+curl "http://tikprint.local/api/diag/printer-test"            # print one test line
+curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
+                                                              # also: pin=N (board pin), invert=1 (flip the signal)
 ```
 
-## Printing (fake printer for now)
+## Printing
 
-The real thermal printer has not arrived, so tickets go to a **fake printer**:
-it writes the title, body, and an ASCII-art picture of any image to the log
-(`idf.py -p /dev/cu.usbmodem5B901739161 monitor`) and remembers the last ticket.
+Tickets go to the thermal printer over a serial wire, as ESC/POS commands
+(`main/printer_thermal.c`).
+
+The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
+
+| Board | Printer TTL socket |
+| --- | --- |
+| IO17 | pin labelled `TX` (green wire) |
+| GND | pin labelled `GND` (black wire) |
+
+- The printer labels its pins from the board's point of view: `TX` is where the
+  board's sending wire goes. The pin labelled `RX` (yellow) does not work.
+- The printer needs its own power supply. The board cannot power it.
+- Do **not** use the board pins labelled TX/RX: those carry the logs.
+- The pin, the serial speed (115200 baud, shown on the printer's self-test page) and whether the printer has a cutter
+  are named constants at the top of `main/printer_thermal.c`.
+- The wire is one-way, so the board cannot tell if the printer is off or out of paper.
+- A ticket is sent in the background; a tall image takes a few seconds.
+  Pressing Print again before it finishes gives "Still printing the last ticket".
+- Title and body are printed in the printer's built-in font, which only knows
+  plain characters; a few symbols are swapped (☐ becomes `[ ]`), the rest print as `?`.
+- Every ticket is also written to the log with an ASCII-art picture of any image
+  (`idf.py -p /dev/cu.usbmodem5B901739161 monitor`), and the last one is remembered.
+- To run with no printer attached, point `s_driver` in `main/printer.c` at `printer_fake_driver`.
 
 - Files are prepared in the browser: blank margins are trimmed, the content is
   scaled to 576 dots wide and turned into pure black and white dots (a clean
@@ -95,9 +119,6 @@ it writes the title, body, and an ASCII-art picture of any image to the log
   are named constants at the top of the "Upload area" code in `web/index.html`.
 - The ticket number is stored on the board and survives reboots.
 
-To add the real printer later: write `main/printer_thermal.c` that fills in a
-`printer_driver_t` (see `main/printer.h`), then change one line in `main/printer.c`.
-
 ## How the code is laid out
 
 | File | Job |
@@ -110,6 +131,7 @@ To add the real printer later: write `main/printer_thermal.c` that fills in a
 | `main/api.c` | The JSON API the UI calls (`/api/...`) |
 | `main/counter.c` | Ticket counter saved on the board (NVS) |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
+| `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire |
 | `main/printer_fake.c` | Fake printer: logs tickets and keeps the last one in PSRAM |
 | `main/web_server.c` | HTTP server on port 80; serves the embedded UI |
 | `web/index.html` | The UI. Gzipped and embedded into the firmware at build time |

@@ -1,6 +1,6 @@
 /*
  * Printer interface. The rest of the firmware only calls the functions here,
- * so swapping the fake printer for the real thermal driver is a one-line change.
+ * so swapping between the thermal printer and the fake one is a one-line change.
  */
 #include "esp_log.h"
 
@@ -8,8 +8,8 @@
 
 static const char *TAG = "printer";
 
-// When the real printer arrives: write printer_thermal.c and point this at its driver.
-static const printer_driver_t *s_driver = &printer_fake_driver;
+// To run without a printer attached, point this at printer_fake_driver instead.
+static const printer_driver_t *s_driver = &printer_thermal_driver;
 
 esp_err_t printer_init(void)
 {
