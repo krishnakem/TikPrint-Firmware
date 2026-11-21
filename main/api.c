@@ -2,13 +2,13 @@
  * JSON API used by the web UI.
  *
  *   GET  /api/ping           empty reply; the UI calls it ~3x a second to notice unplugging fast
- *   GET  /api/status         board, USB and Wi-Fi state
+ *   GET  /api/status         board, USB, Wi-Fi and print queue state
  *   GET  /api/wifi/scan      nearby networks
  *   POST /api/wifi/connect   {"ssid": "...", "password": "..."}
  *   POST /api/wifi/forget
- *   POST /api/print          print a ticket (binary body, see print_post)
+ *   POST /api/print          put a ticket in the print queue (binary body, see print_post)
  *   GET  /api/diag/printer-test?baud=N  print one test line (optionally at another serial speed)
- *   GET  /api/last-ticket    the last ticket the printer received (JSON)
+ *   GET  /api/last-ticket    the last ticket that started printing (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
  */
 #include <string.h>
@@ -175,6 +175,12 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(root, "hostname", NET_HOSTNAME ".local");
     cJSON_AddStringToObject(root, "version", esp_app_get_description()->version);
     cJSON_AddNumberToObject(root, "ticket_count", counter_get());
+    int waiting;
+    bool printing;
+    printer_queue_info(&waiting, &printing);
+    cJSON *queue = cJSON_AddObjectToObject(root, "print_queue");
+    cJSON_AddNumberToObject(queue, "waiting", waiting);    // tickets in line, not counting the one printing
+    cJSON_AddBoolToObject(queue, "printing", printing);
     cJSON_AddNumberToObject(root, "free_heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return send_json(req, root);
@@ -242,7 +248,8 @@ static esp_err_t wifi_connect_post(httpd_req_t *req)
 /* ---------- GET /api/diag/printer-test?baud=9600 ----------
  * Troubleshooting aid: print one line of text. Optional settings are changed first and last
  * until reboot, to find what your printer needs without reflashing:
- *   baud=N  serial speed    pin=N  board pin    invert=1  flip the signal (for RS-232 printers) */
+ *   baud=N  serial speed    pin=N  board pin    invert=1  flip the signal (for RS-232 printers)
+ * Refused with "busy" while any ticket is printing or waiting in the queue. */
 static esp_err_t diag_printer_test_get(httpd_req_t *req)
 {
     char query[64] = "", baud[12] = "", pin[6] = "", inv[4] = "";
@@ -261,11 +268,12 @@ static esp_err_t diag_printer_test_get(httpd_req_t *req)
     } else if (!pin_ok) {
         cJSON_AddBoolToObject(root, "ok", false);
         cJSON_AddStringToObject(root, "error", "bad_pin");
-    } else if (printer_thermal_test(b, p, inv[0] ? atoi(inv) != 0 : -1) != ESP_OK) {
-        cJSON_AddBoolToObject(root, "ok", false);
-        cJSON_AddStringToObject(root, "error", "busy");
     } else {
-        cJSON_AddBoolToObject(root, "ok", true);
+        esp_err_t err = printer_test(b, p, inv[0] ? atoi(inv) != 0 : -1);
+        cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
+        if (err != ESP_OK) {
+            cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer" : "busy");
+        }
     }
     return send_json(req, root);
 }
@@ -290,6 +298,10 @@ static esp_err_t wifi_forget_post(httpd_req_t *req)
  *      font. title/body/source are then only kept for the log and /api/last-ticket.
  *      The browser has already turned the picture or PDF into dots, 576 wide and
  *      pure black/white, so the board never has to decode JPG, PNG or PDF.
+ * The ticket joins the print queue and the reply comes back at once:
+ *   {"ok":true,"number":N,"ticket_count":N,"queued":false,"position":0}
+ *   "position" is its place in line: 0 = printing now, 1 = one ticket ahead of it, ...
+ *   "queued" is true when it has to wait (position > 0).
  */
 static esp_err_t print_fail(httpd_req_t *req, const char *error, const char *message)
 {
@@ -359,22 +371,24 @@ static esp_err_t print_post(httpd_req_t *req)
         goto out;
     }
 
-    job.number = counter_get() + 1;
-    esp_err_t perr = printer_print_job(&job);
+    // The queue copies the job (so buf can be freed below) and gives it its ticket number.
+    printer_ticket_t ticket;
+    esp_err_t perr = printer_print_job(&job, &ticket);
     if (perr == ESP_ERR_INVALID_STATE) {
-        ret = print_fail(req, "busy", "Still printing the last ticket");
+        ret = print_fail(req, "queue_full", "The print queue is full, try again in a moment");
         goto out;
     }
     if (perr != ESP_OK) {
-        ret = print_fail(req, "printer_error", "The printer reported an error");
+        ret = print_fail(req, "no_memory", "The printer is out of memory");
         goto out;
     }
-    counter_increment();  // only count tickets that actually printed
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddNumberToObject(root, "number", job.number);
-    cJSON_AddNumberToObject(root, "ticket_count", job.number);
+    cJSON_AddNumberToObject(root, "number", ticket.number);
+    cJSON_AddNumberToObject(root, "ticket_count", ticket.number);
+    cJSON_AddBoolToObject(root, "queued", ticket.position > 0);
+    cJSON_AddNumberToObject(root, "position", ticket.position);
     ret = send_json(req, root);
 
 out:
@@ -383,12 +397,15 @@ out:
     return ret;
 }
 
-/* ---------- GET /api/last-ticket ---------- */
+/* ---------- GET /api/last-ticket ----------
+ * The last ticket that STARTED printing. The printer task replaces it when the next
+ * ticket starts, so it is only read between printer_last_job_lock() and ..._unlock(). */
 static esp_err_t last_ticket_get(httpd_req_t *req)
 {
-    const printer_job_t *job = printer_last_job();
+    const printer_job_t *job = printer_last_job_lock();
     cJSON *root = cJSON_CreateObject();
     if (!job) {
+        printer_last_job_unlock();
         httpd_resp_set_status(req, "404 Not Found");
         cJSON_AddStringToObject(root, "error", "no_ticket");
         return send_json(req, root);
@@ -405,6 +422,7 @@ static esp_err_t last_ticket_get(httpd_req_t *req)
     } else {
         cJSON_AddNullToObject(root, "image");
     }
+    printer_last_job_unlock();   // cJSON has copied the text, so the job is no longer needed
     return send_json(req, root);
 }
 
@@ -413,8 +431,9 @@ static esp_err_t last_ticket_get(httpd_req_t *req)
  * That is exactly how the image is stored, so it can be sent as-is. */
 static esp_err_t last_ticket_pbm_get(httpd_req_t *req)
 {
-    const printer_job_t *job = printer_last_job();
+    const printer_job_t *job = printer_last_job_lock();
     if (!job || !job->image) {
+        printer_last_job_unlock();
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "the last ticket has no image");
     }
     char header[32];
@@ -424,6 +443,7 @@ static esp_err_t last_ticket_pbm_get(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=\"last-ticket.pbm\"");
     httpd_resp_send_chunk(req, header, n);
     httpd_resp_send_chunk(req, (const char *)job->image, (size_t)job->image_rows * PRINTER_WIDTH_BYTES);
+    printer_last_job_unlock();   // the image has been sent; the next ticket may replace it now
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 

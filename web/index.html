@@ -866,13 +866,14 @@ function printBody(){
   if(file)buf.set(file.data,4+json.length+(text?text.data.length:0));
   return buf;
 }
+const nth=n=>n+(n%100>10&&n%100<14?'th':['th','st','nd','rd'][n%10]||'th');   // 1st, 2nd, 3rd, 4th...
 const FEED_MS=px=>Math.round(Math.min(1100,Math.max(550,px*1.1)));   // how long the ticket takes to fly off, from the distance in pixels
 async function doPrint(){
   if(printing||offline)return;
   if(!docText()&&!$('pImg').classList.contains('on')){doc.focus();return}
   if($('pImg').classList.contains('on')&&!imgBits){toast('Still preparing the file…');return}
   const body=printBody(); if(!body){toast('Too much text for one ticket');return}
-  printing=true; $('printBtn').disabled=true;
+  printing=true; $('printBtn').disabled=true;   // only while the ticket uploads: the board queues it, so Print works again right after
   const away=$('paper').getBoundingClientRect().bottom+40;   // far enough to clear the top of the screen
   $('paper').style.setProperty('--away',-away+'px'); $('paper').style.setProperty('--feed',FEED_MS(away)+'ms'); $('paper').classList.add('out');
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),20000);
@@ -889,7 +890,9 @@ async function doPrint(){
   if(r.ok){
     // a long file prints one part per press: after each part, the next one comes up
     const multi=job&&job.parts.length>1, more=multi&&job.cur<job.parts.length-1;
-    toast((multi?`Printed part ${job.cur+1} of ${job.parts.length}`:`Printed ${pad(r.number)}`)+(viaUsb?' over USB-C':''));
+    // the board answers as soon as the ticket is in its queue: r.position is how many tickets are ahead of it
+    const what=multi?`part ${job.cur+1} of ${job.parts.length}`:pad(r.number);
+    toast(r.queued?`Queued ${what}, ${nth(r.position+1)} in line`:`Printed ${what}`+(viaUsb?' over USB-C':''));
     ticket=r.ticket_count+1; showDate();
     setDoc('');
     if(more)showPart(job.cur+1); else $('rmImg').click();
