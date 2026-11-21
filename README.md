@@ -124,7 +124,6 @@ curl http://tikprint.local/api/last-ticket          # the last ticket that start
 open http://tikprint.local/api/last-ticket.pbm      # its image, exactly as the printer got it
 curl "http://tikprint.local/api/diag/ping?ip=1.1.1.1"   # make the board ping something (troubleshooting)
 curl http://tikprint.local/api/diag/printer-status            # ask the printer how it is: raw answer bytes + meaning (see Printer status)
-curl "http://tikprint.local/api/diag/printer-pace"            # print a strip comparing ways of sending a dark image (see api.c)
 curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
@@ -229,6 +228,10 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
   A PDF, or a picture taller than 20 cm of paper (`INLINE_MAX_ROWS`), goes below the text instead.
 - An SVG has no fixed size, so the page draws it at twice the paper's width before turning it into
   dots (`SVG_PX` in `web/index.html`). A small icon comes out as sharp as a large drawing.
+- Large dark areas of a picture are thinned to a half-black dot pattern (`INK_MAX` in `web/index.html`).
+  This printer squashes pictures that are darker than that: tests showed blocks up to 50 % black print
+  true to size, while 75 % and solid black come out shorter, with white hairlines, and worse the longer
+  the printer has been printing dark. Text you type is not affected.
 - Files are prepared in the browser: blank margins are trimmed, the content is
   scaled to 576 dots wide and turned into pure black and white dots (a clean
   cut for text and line art, dithering for photos). The ticket on screen shows
