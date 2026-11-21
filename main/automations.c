@@ -29,6 +29,8 @@ static const char *TAG = "automations";
 #define TASK_STACK    12288   // HTTPS needs a deep stack
 #define TASK_PRIORITY 4
 #define MAX_JOBS      4       // jobs that can wait in the mailbox
+#define LOCATE_RETRY_MS  10000   // the ZIP code's town could not be looked up (no Wi-Fi yet?): try again this often
+#define LOCATE_RETRIES   30      // ... this many times (5 minutes), then wait for the next print or ZIP code change
 
 typedef enum { JOB_WEATHER_LOCATE, JOB_WEATHER_PRINT } job_type_t;
 
@@ -100,18 +102,26 @@ static void weather_print(weather_kind_t kind, bool spread_load)
 
 static void automations_task(void *arg)
 {
+    // At start-up: if a ZIP code is saved but its town is not known yet, look it up once Wi-Fi is there.
+    int locate_tries_left = LOCATE_RETRIES;
     for (;;) {
-        job_t job;
-        if (xQueueReceive(s_jobs, &job, portMAX_DELAY) != pdTRUE) {
+        // Wait for a job. While a town still has to be looked up, only wait a little, then try that again.
+        job_t job = { .type = JOB_WEATHER_LOCATE };
+        bool got_job = xQueueReceive(s_jobs, &job, locate_tries_left > 0 ? pdMS_TO_TICKS(LOCATE_RETRY_MS) : portMAX_DELAY) == pdTRUE;
+        if (got_job && job.type == JOB_WEATHER_PRINT) {
+            weather_print(job.kind, false);   // asked for by a person: no random wait
             continue;
         }
-        if (job.type == JOB_WEATHER_PRINT) {
-            weather_print(job.kind, false);   // asked for by a person: no random wait
+        if (got_job) {
+            locate_tries_left = LOCATE_RETRIES;   // the ZIP code just changed: start afresh
+        }
+        weather_result_t res = weather_locate();
+        if (res == WEATHER_OK || res == WEATHER_NO_ZIP) {
+            locate_tries_left = 0;
         } else {
-            weather_result_t res = weather_locate();
-            if (res != WEATHER_OK && res != WEATHER_NO_ZIP) {
-                ESP_LOGW(TAG, "could not look up the ZIP code's place yet: %s", weather_result_name(res));
-            }
+            locate_tries_left--;
+            ESP_LOGW(TAG, "could not look up the ZIP code's town yet (%s): %d more tries", weather_result_name(res),
+                     locate_tries_left);
         }
     }
 }
