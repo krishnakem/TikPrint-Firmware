@@ -228,10 +228,6 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
   A PDF, or a picture taller than 20 cm of paper (`INLINE_MAX_ROWS`), goes below the text instead.
 - An SVG has no fixed size, so the page draws it at twice the paper's width before turning it into
   dots (`SVG_PX` in `web/index.html`). A small icon comes out as sharp as a large drawing.
-- Large dark areas of a picture are thinned to a half-black dot pattern (`INK_MAX` in `web/index.html`).
-  This printer squashes pictures that are darker than that: tests showed blocks up to 50 % black print
-  true to size, while 75 % and solid black come out shorter, with white hairlines, and worse the longer
-  the printer has been printing dark. Text you type is not affected.
 - Files are prepared in the browser: blank margins are trimmed, the content is
   scaled to 576 dots wide and turned into pure black and white dots (a clean
   cut for text and line art, dithering for photos). The ticket on screen shows
