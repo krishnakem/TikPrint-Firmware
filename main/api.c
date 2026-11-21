@@ -268,6 +268,23 @@ static void add_automations(cJSON *root)
     cJSON_AddBoolToObject(weather, "locating", w.locating);
     cJSON_AddStringToObject(weather, "locate_error", w.locate_error);
     cJSON_AddStringToObject(weather, "locate_message", w.locate_message);
+    // The schedule: "on" is the whole thing; each slot has a time of day ("07:30", 24-hour) and its own switch.
+    settings_weather_schedule_t sched;
+    settings_get_weather_schedule(&sched);
+    cJSON *schedule = cJSON_AddObjectToObject(weather, "schedule");
+    cJSON_AddBoolToObject(schedule, "on", sched.on);
+    cJSON_AddNumberToObject(schedule, "max_per_day", AUTOMATIONS_WEATHER_MAX_PER_DAY);
+    cJSON *slots = cJSON_AddArrayToObject(schedule, "slots");
+    static const weather_kind_t SLOT_KIND[SETTINGS_WEATHER_SLOTS] = { WEATHER_TODAY, WEATHER_REST_OF_TODAY, WEATHER_TOMORROW };
+    for (int i = 0; i < SETTINGS_WEATHER_SLOTS; i++) {
+        char at[8];
+        snprintf(at, sizeof(at), "%02d:%02d", sched.slot[i].minute / 60, sched.slot[i].minute % 60);
+        cJSON *slot = cJSON_CreateObject();
+        cJSON_AddStringToObject(slot, "time", at);
+        cJSON_AddBoolToObject(slot, "on", sched.slot[i].on);
+        cJSON_AddStringToObject(slot, "kind", weather_kind_name(SLOT_KIND[i]));
+        cJSON_AddItemToArray(slots, slot);
+    }
     if (!w.ran) {
         cJSON_AddNullToObject(weather, "last");
         return;
@@ -1073,18 +1090,85 @@ static esp_err_t weather_post(httpd_req_t *req)
     if (!body) {
         return ESP_OK;
     }
+    // Every part is optional: only what is sent is changed.
     const cJSON *jzip = cJSON_GetObjectItem(body, "zip");
+    const cJSON *jon = cJSON_GetObjectItem(body, "on"), *jslots = cJSON_GetObjectItem(body, "slots");
     int lat_e2, lon_e2;
-    bool ok = cJSON_IsString(jzip) && (!jzip->valuestring[0] || zip_table_lookup(jzip->valuestring, &lat_e2, &lon_e2)) &&
-              settings_set_weather_zip(jzip->valuestring) == ESP_OK;
+    bool zip_ok = !jzip || (cJSON_IsString(jzip) && (!jzip->valuestring[0] || zip_table_lookup(jzip->valuestring, &lat_e2, &lon_e2)));
+
+    // The schedule: {"on": true, "slots": [{"time": "07:30", "on": true}, ... one per slot]}
+    settings_weather_schedule_t was, sched;
+    settings_get_weather_schedule(&was);
+    sched = was;
+    bool sched_ok = (!jon || cJSON_IsBool(jon)) && (!jslots || cJSON_GetArraySize(jslots) == SETTINGS_WEATHER_SLOTS);
+    if (jon && sched_ok) {
+        sched.on = cJSON_IsTrue(jon);
+    }
+    for (int i = 0; jslots && sched_ok && i < SETTINGS_WEATHER_SLOTS; i++) {
+        const cJSON *slot = cJSON_GetArrayItem(jslots, i);
+        const cJSON *at = cJSON_GetObjectItem(slot, "time"), *on = cJSON_GetObjectItem(slot, "on");
+        int hour, minute;
+        char extra;
+        if (at) {
+            sched_ok = cJSON_IsString(at) && sscanf(at->valuestring, "%2d:%2d%c", &hour, &minute, &extra) == 2 &&
+                       hour >= 0 && hour < 24 && minute >= 0 && minute < 60;
+            if (sched_ok) {
+                sched.slot[i].minute = (uint16_t)(hour * 60 + minute);
+            }
+        }
+        if (on && sched_ok) {
+            sched_ok = cJSON_IsBool(on);
+            sched.slot[i].on = cJSON_IsTrue(on);
+        }
+    }
+    bool ok = zip_ok && sched_ok && (!jzip || settings_set_weather_zip(jzip->valuestring) == ESP_OK) &&
+              settings_set_weather_schedule(&sched) == ESP_OK;
+    bool zip_sent = jzip != NULL;
     cJSON_Delete(body);
-    if (!ok) {
+    if (!zip_ok) {
         return refuse(req, "400 Bad Request", "bad_zip", "That is not a US ZIP code the printer knows");
     }
-    automations_weather_zip_changed();
+    if (!ok) {
+        return refuse(req, "400 Bad Request", "bad_schedule", "That is not a schedule the printer understands");
+    }
+    for (int i = 0; i < SETTINGS_WEATHER_SLOTS; i++) {
+        if (sched.slot[i].minute != was.slot[i].minute) {
+            automations_weather_slot_changed(i);   // a slot moved to a new time may print again today
+        }
+    }
+    if (zip_sent) {
+        automations_weather_zip_changed();
+    }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
     add_automations(root);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/automations/weather/run-slot ----------
+ * For testing the schedule without waiting for the clock: {"slot": 0} runs the first scheduled
+ * print right now (0, 1 or 2). It does not count towards the daily limit. Not used by the page:
+ *   curl -X POST -H 'Content-Type: application/json' -d '{"slot":0}' http://tikprint.local/api/automations/weather/run-slot */
+static esp_err_t weather_run_slot_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *jslot = cJSON_GetObjectItem(body, "slot");
+    esp_err_t err = cJSON_IsNumber(jslot) ? automations_weather_run_slot(jslot->valueint) : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(body);
+    if (err == ESP_ERR_INVALID_ARG) {
+        return refuse(req, "400 Bad Request", "bad_slot", "The slot must be 0, 1 or 2");
+    }
+    if (err != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is still busy with an earlier request");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
     return send_json(req, root);
 }
 
@@ -1153,6 +1237,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/update",       .method = HTTP_POST, .handler = update_post },
         { .uri = "/api/automations/weather", .method = HTTP_POST, .handler = weather_post },
         { .uri = "/api/automations/weather/print-now", .method = HTTP_POST, .handler = weather_print_now_post },
+        { .uri = "/api/automations/weather/run-slot", .method = HTTP_POST, .handler = weather_run_slot_post },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(server, &routes[i]);

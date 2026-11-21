@@ -32,6 +32,15 @@ esp_err_t automations_start(void);
  */
 esp_err_t automations_weather_print_now(weather_kind_t kind);
 
+#define AUTOMATIONS_WEATHER_MAX_PER_DAY 3   // scheduled weather prints a day (printing by hand is never limited)
+
+/** A slot of the weather schedule got a new time: it may print again today (the daily limit still holds). */
+void automations_weather_slot_changed(int slot);
+
+/** For testing: run a slot of the schedule right now, as if its time had come. It does not count towards
+ *  the daily limit. ESP_ERR_INVALID_ARG for a slot that does not exist, ESP_ERR_INVALID_STATE if the mailbox is full. */
+esp_err_t automations_weather_run_slot(int slot);
+
 /** The weather ZIP code changed: look up its place name in the background, for the web UI. */
 void automations_weather_zip_changed(void);
 

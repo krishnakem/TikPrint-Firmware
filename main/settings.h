@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 #define SETTINGS_LOCATION_MAX 48   // longest location we keep, in bytes, including the ending 0
@@ -37,3 +38,19 @@ void settings_get_weather_zip(char out[SETTINGS_ZIP_MAX]);
 /** Change it and remember it across reboots. "" clears it.
  *  ESP_ERR_INVALID_ARG if it is neither "" nor five digits. (Whether such a ZIP code exists is for zip_table.h.) */
 esp_err_t settings_set_weather_zip(const char *zip);
+
+#define SETTINGS_WEATHER_SLOTS 3   // scheduled weather prints a day
+
+/** When weather tickets print by themselves. Slot 0 prints "today", slot 1 "rest of today", slot 2 "tomorrow". */
+typedef struct {
+    bool on;                          // the whole schedule; off = nothing prints by itself
+    struct {
+        uint16_t minute;              // time of day in minutes after midnight, local time (7:30 AM = 450)
+        bool on;
+    } slot[SETTINGS_WEATHER_SLOTS];
+} settings_weather_schedule_t;
+
+void settings_get_weather_schedule(settings_weather_schedule_t *out);
+
+/** Change it and remember it across reboots. ESP_ERR_INVALID_ARG if a time is not within a day. */
+esp_err_t settings_set_weather_schedule(const settings_weather_schedule_t *in);
