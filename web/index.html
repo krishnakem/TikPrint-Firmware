@@ -72,7 +72,8 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 
 /* formatting toolbar */
 .tools{width:var(--col);margin-bottom:12px;display:flex;align-items:center;gap:4px;padding:5px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
-.tools select{height:30px;min-width:0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);font-size:13px;padding:0 2px}
+.tools select{height:30px;min-width:0;border:0;border-radius:6px;background:transparent;color:var(--ink);font-size:13px;padding:0 4px;outline:none;cursor:pointer}
+.tools select:hover,.tools select:focus-visible{background:var(--hover)}
 #fFont{flex:1}
 #fSize{width:58px;flex:none}
 .tools button{width:30px;height:30px;flex:none;border-radius:6px;font-size:14px;color:var(--ink);display:grid;place-items:center}
@@ -128,7 +129,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .pnote .led{display:inline-block;margin-right:7px;vertical-align:1px}
 
 /* ---------- Popovers from menu bar ---------- */
-.pop{position:fixed;top:56px;right:20px;z-index:11;width:300px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.14);display:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.pop{max-height:calc(100vh - 76px);overflow-y:auto;position:fixed;top:56px;right:20px;z-index:11;width:300px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.14);display:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .pop h3{font-size:13px;font-weight:600;color:var(--muted);margin:6px 10px 6px}
 .net .mi .bars{display:inline-flex;gap:2px;align-items:flex-end}
 .net .mi .bars i{width:3px;background:currentColor;border-radius:1px}
@@ -150,14 +151,51 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .kv{display:flex;justify-content:space-between;padding:9px 10px;font-size:14px}
 .kv span:last-child{color:var(--muted);font:13px var(--mono)}
 .kv{align-items:center}
-.kv input[type=text]{width:150px;text-align:right;border:0;border-bottom:1px solid var(--line);background:transparent;font:13px var(--mono);color:var(--ink);outline:none;padding:2px 0}
-.kv input[type=text]:focus{border-color:var(--ink)}
+.kv input[type=text]{width:160px;text-align:right;border:0;border-radius:6px;background:transparent;font:13px var(--mono);color:var(--ink);outline:none;padding:5px 7px;margin:-5px -7px -5px 0;transition:background .12s}
+.kv input[type=text]::placeholder{color:var(--muted)}
+.kv input[type=text]:hover,.kv input[type=text]:focus{background:var(--hover)}
+/* Settings: each group of rows is a titled box, with hairlines between its rows */
+#gearPop{width:320px}
+#gearMain h3{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;margin:14px 10px 6px}
+#gearMain h3:first-child{margin-top:6px}
+.grp{background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.grp .kv{padding:10px 12px}
+.grp .kv:not([hidden])~.kv{border-top:1px solid var(--line)}
+.grp button.kv{border-radius:0}
+.kv .go{font:15px var(--sans);color:var(--muted)}
 label.kv{cursor:pointer}
 /* On/off switch */
 .sw{appearance:none;-webkit-appearance:none;width:30px;height:18px;border-radius:9px;background:var(--line);position:relative;cursor:pointer;transition:.15s;margin:0;flex:none}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.15s}
 .sw:checked{background:var(--ok)} .sw:checked::after{left:14px}
 .note{display:flex;align-items:center;gap:8px;padding:9px 10px;font-size:14px;color:var(--muted)}
+.kv[hidden]{display:none}
+/* A settings row you can press (Change PIN, Update firmware) */
+button.kv{width:100%;border-radius:8px;text-align:left}
+button.kv:hover{background:var(--hover)}
+/* Sheet: PIN entry and firmware update take over the Settings popover */
+.sheet{display:none;padding:18px 10px 10px;text-align:center}
+.sheet .c{width:36px;height:36px;border-radius:50%;background:var(--hover);color:var(--ink);display:grid;place-items:center;margin:0 auto 10px}
+.sheet .c.ok{background:var(--ok);color:#fff}
+.sheet .c.bad{background:var(--bad);color:#fff}
+.sheet b{display:block;font-size:15px}
+.sheet p{margin:4px 6px 0;min-height:36px;font-size:13px;line-height:1.4;color:var(--muted)}
+.sheet .link{display:block;margin:10px auto 0;color:var(--muted);font-size:13px}
+.sheet .link:hover{color:var(--ink)}
+/* PIN boxes. The real text field lies invisibly on top of them, so typing, pasting and phone keypads all work. */
+.pin{position:relative;display:flex;justify-content:center;gap:7px;margin:14px 0 6px}
+.pin i{width:34px;height:42px;border:1px solid var(--line);border-radius:9px;background:var(--bg);display:grid;place-items:center;transition:border-color .12s,box-shadow .12s}
+.pin i.f::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--ink);animation:dot .14s ease}
+@keyframes dot{from{transform:scale(.3);opacity:0}}
+.pin:focus-within i.cur{border-color:var(--ink);box-shadow:0 0 0 3px var(--hover)}
+.pin input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:text;font-size:16px}
+.pin.bad{animation:shake .34s}
+.pin.bad i{border-color:var(--bad)}
+@keyframes shake{20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
+/* Upload progress */
+.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px 10px 10px}
+.bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
+@media (prefers-reduced-motion:reduce){.pin.bad,.pin i.f::after{animation:none}}
 .ok-state .link+.link{margin-top:6px}
 
 .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
@@ -208,22 +246,46 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
 
 <!-- Settings popover -->
 <div class="pop" id="gearPop">
-  <div class="kv"><span>Name</span><span id="setName">tikprint.local</span></div>
-  <div class="kv"><span>USB-C</span><span id="setUsb">192.168.7.1</span></div>
-  <div class="kv"><span>PIN</span><span>Off</span></div>
-  <div class="kv"><span>Clock</span><span id="setClock"></span></div>
-  <div class="kv"><span>Firmware</span><span id="setFw"></span></div>
-  <h3>Ticket header</h3>
-  <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Location"></div>
-  <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
-  <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
-  <label class="kv"><span>Show time</span><input type="checkbox" class="sw" id="swTime"></label>
+  <div id="gearMain">
+    <h3>Printer</h3>
+    <div class="grp">
+      <div class="kv"><span>Name</span><span id="setName">tikprint.local</span></div>
+      <div class="kv"><span>USB-C</span><span id="setUsb">192.168.7.1</span></div>
+      <div class="kv"><span>Clock</span><span id="setClock"></span></div>
+    </div>
+    <h3>Ticket header</h3>
+    <div class="grp">
+      <div class="kv"><span>Location</span><input type="text" id="setLoc" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Location"></div>
+      <label class="kv"><span>Show location</span><input type="checkbox" class="sw" id="swLoc"></label>
+      <label class="kv"><span>Show date</span><input type="checkbox" class="sw" id="swDate"></label>
+      <label class="kv"><span>Show time</span><input type="checkbox" class="sw" id="swTime"></label>
+    </div>
+    <h3>Firmware</h3>
+    <div class="grp">
+      <div class="kv"><span>Version</span><span id="setFw"></span></div>
+      <button class="kv" id="fwBtn"><span>Update firmware</span><span class="go">›</span></button>
+      <label class="kv"><span>Require PIN for updates</span><input type="checkbox" class="sw" id="swPin"></label>
+      <button class="kv" id="pinChange" hidden><span>Change PIN</span><span class="go">›</span></button>
+    </div>
+    <input type="file" id="fwFile" accept=".bin,application/octet-stream" hidden>
+  </div>
+  <!-- PIN entry and update progress are shown here, in place of the list above -->
+  <div class="sheet" id="sheet" aria-live="polite">
+    <div class="c" id="shIco"></div>
+    <b id="shTitle"></b>
+    <p id="shText"></p>
+    <div class="pin" id="shPin"><input type="text" id="pinIn" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="PIN"></div>
+    <div class="bar" id="shBar"><i></i></div>
+    <button class="link" id="shForgot"></button>
+    <button class="link" id="shCancel"></button>
+  </div>
 </div>
 
 <main>
   <!-- Formatting toolbar: works on the selected text, like a word processor -->
   <div class="tools" id="tools">
     <select id="fFont" aria-label="Font"></select>
+    <span class="sep"></span>
     <select id="fSize" aria-label="Size in points"></select>
     <span class="sep"></span>
     <button data-cmd="bold" aria-label="Bold" title="Bold"><b>B</b></button>
@@ -499,7 +561,7 @@ function showPrinter(p,q){
 }
 
 /* ---------- Status (menu bar, ticket number, settings) ---------- */
-let viaUsb=false, scanning=false, printing=false;
+let viaUsb=false, scanning=false, printing=false, updating=false;   // updating: a firmware update is under way
 function applyStatus(s){
   viaUsb=s.via==='usb';
   $('usbLed').classList.toggle('off',!viaUsb);
@@ -509,7 +571,8 @@ function applyStatus(s){
   $('wifiLabel').textContent=s.wifi?'Wi-Fi':(s.wifi_connecting?'Connecting…':'Set up Wi-Fi');
   $('wifiBtn').title=s.wifi?`${s.wifi.ssid} · ${s.wifi.ip}`:'';
   ticket=s.ticket_count+1; showDate();
-  $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip; $('setFw').textContent='v'+s.version;
+  $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip;
+  if(s.update)showFirmware(s); else $('setFw').textContent='v'+s.version;
   $('okHost').textContent=s.hostname;
   // The board forgets the time when it loses power: give it back as soon as it says so (also the very first time).
   if(s.settings)applySettings(s.settings);
@@ -543,7 +606,7 @@ async function ping(){
 }
 let beats=0;
 (async function beat(){
-  if(!joining&&!scanning&&!printing){
+  if(!joining&&!scanning&&!printing&&!updating){   // these keep the board busy: silence then is not "disconnected"
     const r=await ping();
     if(r==='ok'){
       misses=0;
@@ -558,14 +621,178 @@ addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{p
 
 /* popovers + dropdown */
 function closeAll(except){
+  if(updating)except='gearPop';     // a firmware update is running: its progress stays on screen
+  if(except!=='gearPop')closeSheet();
   ['wifiPop','gearPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
   if(except!=='conn')$('conn').classList.remove('open');
   $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop');
 }
-$('wifiBtn').onclick=e=>{e.stopPropagation();const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
-$('gearBtn').onclick=e=>{e.stopPropagation();const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
+$('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
+$('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
 $('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);$('conn').classList.toggle('open',o)};
 document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(null)});
+
+/* ---------- Firmware update and its PIN ---------- */
+/* Settings > Firmware:
+   - "Update firmware" sends a firmware file (build/tikprint_firmware.bin) to the board. The board writes
+     it to a spare firmware slot, checks it and restarts into it. This page shows the upload, waits for
+     the board to come back, then reloads itself so you get the new page too.
+   - "Require PIN for updates" is optional. Switch it on and choose a PIN: from then on the board refuses
+     an update without it. The PIN is kept on the board, never in this page.
+   PIN entry and update progress are shown as a "sheet" that takes over the Settings popover. */
+const PIN_LEN=6;                // digits in a PIN. Must match PIN_LEN in main/pin.h
+const UPDATE_UPLOAD_MS=180000;  // give up on an upload after this long
+const UPDATE_BACK_MS=60000;     // how long to wait for the board to come back after an update
+const SVG=d=>`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const SHEET_ICONS={
+  lock:SVG('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+  up:SVG('<path d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/>'),
+  ok:SVG('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  bad:SVG('<path d="M12 7v6M12 17h.01"/>'),
+  wait:'<span class="spin"></span>',
+};
+const sleep=ms=>new Promise(f=>setTimeout(f,ms));
+let pinOn=false, fw={id:'',slot:'',max:4194304,boot:0}, sheetDone=null;
+$('pinIn').maxLength=PIN_LEN;
+for(let i=0;i<PIN_LEN;i++)$('shPin').insertBefore(document.createElement('i'),$('pinIn'));
+
+/* From /api/status: which firmware is running, and whether updates ask for the PIN.
+   "id" is different for every build, even when the version number is the same. */
+function showFirmware(s){
+  const u=s.update;
+  fw={id:u.id,slot:u.slot,max:u.max_bytes||fw.max,boot:s.boot_id};
+  pinOn=u.pin_required;
+  $('setFw').textContent=`v${s.version} · ${u.id.slice(0,7)}`;
+  $('setFw').title=`Built ${u.built}, running from "${u.slot}"`;
+  $('swPin').checked=pinOn; $('pinChange').hidden=!pinOn;
+}
+
+/* The sheet. o = {icon, tone:'ok'|'bad', title, text, pin:true, bar:true, forgot:true, cancel:'Cancel'} */
+function showSheet(o){
+  $('gearMain').style.display='none'; $('sheet').style.display='block';
+  $('shIco').className='c'+(o.tone?' '+o.tone:''); $('shIco').innerHTML=SHEET_ICONS[o.icon];
+  $('shTitle').textContent=o.title; $('shText').textContent=o.text||'';
+  $('shPin').style.display=o.pin?'':'none'; $('shBar').style.display=o.bar?'':'none';
+  $('shForgot').style.display=o.forgot?'':'none'; $('shForgot').textContent=viaUsb?'Forgot it? Remove the PIN':'Forgot the PIN?';
+  $('shCancel').style.display=o.cancel?'':'none'; $('shCancel').textContent=o.cancel||''; $('shCancel').onclick=closeSheet;
+}
+function closeSheet(){
+  if(sheetDone)sheetDone(null);   // a PIN was being asked for: that counts as Cancel
+  $('sheet').style.display='none'; $('gearMain').style.display='';
+}
+
+/* Ask for a PIN on the sheet. Gives back the PIN, or null if the person cancelled.
+   verify(pin) may check it first: it returns nothing if the PIN is fine, or the message to show
+   (the boxes then shake, empty themselves and wait for another try). */
+function askPin(o,verify){
+  return new Promise(resolve=>{
+    const inp=$('pinIn'), box=$('shPin'), cells=[...box.querySelectorAll('i')];
+    let busy=false, live=true;
+    const draw=()=>cells.forEach((c,i)=>{c.classList.toggle('f',i<inp.value.length);c.classList.toggle('cur',i===Math.min(inp.value.length,PIN_LEN-1))});
+    const done=v=>{if(!live)return; live=false; sheetDone=null; inp.oninput=null; inp.blur(); resolve(v)};
+    sheetDone=done;
+    showSheet({icon:'lock',pin:true,cancel:'Cancel',...o});
+    inp.value=''; box.classList.remove('bad'); draw(); inp.focus();
+    inp.oninput=async()=>{
+      inp.value=inp.value.replace(/\D/g,'').slice(0,PIN_LEN); box.classList.remove('bad'); draw();
+      if(inp.value.length<PIN_LEN||busy)return;
+      busy=true; const pin=inp.value, problem=verify?await verify(pin):null; busy=false;
+      if(!live)return;
+      if(!problem)return done(pin);
+      $('shText').textContent=problem; inp.value=''; draw();
+      void box.offsetWidth; box.classList.add('bad'); inp.focus();   // offsetWidth: lets the shake play again
+    };
+    $('shCancel').onclick=()=>done(null);
+    $('shForgot').onclick=async()=>{await forgotPin(done); if(live)inp.focus()};   // back to the boxes, so typing still lands in them
+  });
+}
+/* A forgotten PIN can be removed without knowing it, but only by someone holding the board: over the USB cable. */
+async function forgotPin(done){
+  if(!viaUsb){$('shText').textContent=`Plug the printer into a computer with the USB-C cable and open http://${$('setUsb').textContent} there. Over the cable the PIN can be removed without knowing it.`;return}
+  let r=null; try{r=await api('/api/pin',{reset:true})}catch(e){}
+  if(r&&r.ok){done(null); closeSheet(); toast('PIN removed'); refreshStatus()}
+  else $('shText').textContent=(r&&r.message)||'Can’t reach the printer';
+}
+/* Both give back nothing when the board agreed, or the board's message when it did not ("Wrong PIN. 3 tries left"). */
+const pinAnswer=async(path,body)=>{try{const r=await api(path,body);return r.ok?null:(r.message||'That didn’t work')}catch(e){return 'Can’t reach the printer'}};
+const checkPin=pin=>pinAnswer('/api/pin/check',{pin});
+const sendPin=body=>pinAnswer('/api/pin',body);
+async function chooseNewPin(){
+  const first=await askPin({title:'Choose a PIN',text:`${PIN_LEN} digits. The printer will ask for it before every firmware update.`});
+  if(!first)return null;
+  return askPin({title:'Enter it again',text:'Just to be sure.'},async p=>p===first?null:'Those didn’t match. Enter the first PIN again.');
+}
+$('swPin').onclick=async e=>{
+  e.preventDefault();   // the switch only moves once the board has agreed
+  if(pinOn){
+    if(await askPin({title:'Enter your PIN',text:'To stop asking for a PIN before updates.',forgot:true},p=>sendPin({current:p,new:''})))toast('PIN is off');
+  }else{
+    const pin=await chooseNewPin();
+    if(pin)toast(await sendPin({new:pin})||'PIN is on');
+  }
+  closeSheet(); refreshStatus();
+};
+$('pinChange').onclick=async()=>{
+  const current=await askPin({title:'Enter the current PIN',text:'Then you can choose a new one.',forgot:true},checkPin);
+  const pin=current&&await chooseNewPin();
+  if(pin)toast(await sendPin({current,new:pin})||'PIN changed');
+  closeSheet(); refreshStatus();
+};
+
+/* Sending the file. XMLHttpRequest rather than fetch, because it reports how much has been sent. */
+function uploadFirmware(file,pin,onProgress){
+  return new Promise(done=>{
+    const x=new XMLHttpRequest(), lost=()=>done({ok:false,message:'Lost contact with the printer during the upload. Nothing was changed.'});
+    x.open('POST','/api/update'); x.timeout=UPDATE_UPLOAD_MS;
+    x.setRequestHeader('Content-Type','application/octet-stream');
+    if(pin)x.setRequestHeader('X-PIN',pin);
+    x.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded/e.total)};
+    x.onload=()=>{try{done(JSON.parse(x.responseText))}catch(e){lost()}};
+    x.onerror=x.ontimeout=x.onabort=lost;
+    x.send(file);
+  });
+}
+function sheetProblem(title,text){showSheet({icon:'bad',tone:'bad',title,text,cancel:'Close'})}
+async function installFirmware(file,pin){
+  updating=true;   // the board answers nothing else while it takes the file, so the heartbeat pauses
+  const was={...fw}, size=(file.size/1048576).toFixed(1)+' MB';
+  showSheet({icon:'up',title:'Updating firmware',text:`${file.name} · ${size}`,bar:true});
+  const fill=$('shBar').firstElementChild; fill.style.width='0';
+  const r=await uploadFirmware(file,pin,p=>{
+    fill.style.width=(p*100).toFixed(1)+'%';
+    $('shText').textContent=p<1?`${file.name} · ${Math.round(p*100)}% of ${size}`:'Checking the new firmware…';
+  });
+  if(!r.ok){updating=false; sheetProblem('Update failed',r.message||'The printer refused the file.'); refreshStatus(); return}
+
+  // The board restarts about a second after it answers. "boot_id" is new after every restart.
+  showSheet({icon:'wait',title:'Restarting',text:'The printer is starting the new firmware. This takes a few seconds.'});
+  const start=Date.now(); let s=null;
+  while(!s&&Date.now()-start<UPDATE_BACK_MS){
+    await sleep(800);
+    try{const now=await api('/api/status',undefined,1500); if(now.update&&now.boot_id!==was.boot)s=now}catch(e){}
+  }
+  updating=false;
+  if(!s)return sheetProblem('The printer hasn’t come back','Check that it has power and is on the network. If it stays away, flash it once with the USB cable.');
+  applyStatus(s);
+  // New firmware always runs from a different slot. Same slot as before = the board gave up on it and went back.
+  if(s.update.slot===was.slot)return sheetProblem('Update undone','The new firmware didn’t start properly, so the printer went back to the one it had.');
+  showSheet({icon:'ok',tone:'ok',title:'Updated',text:`Now running v${s.version} · ${s.update.id.slice(0,7)}`});
+  await sleep(1800); location.reload();   // the page itself is part of the firmware
+}
+$('fwBtn').onclick=()=>$('fwFile').click();
+$('fwFile').onchange=async e=>{
+  const file=e.target.files[0]; e.target.value='';
+  if(!file||updating)return;
+  // Every ESP32 program file starts with the byte E9. The board checks the rest.
+  const first=new Uint8Array(await file.slice(0,1).arrayBuffer())[0];
+  if(first!==0xE9||file.size>fw.max){toast('That isn’t a TikPrint firmware file');return}
+  let pin='';
+  if(pinOn){
+    pin=await askPin({title:'Enter your PIN',text:`To install ${file.name}.`,forgot:true},checkPin);
+    if(!pin){closeSheet();return}
+  }
+  installFirmware(file,pin);
+};
 
 /* ---------- Wi-Fi ---------- */
 let NETS=[];

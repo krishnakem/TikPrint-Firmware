@@ -4,7 +4,7 @@ Firmware for the Waveshare ESP32-S3 board (32 MB flash, 16 MB PSRAM).
 Plug the board into a computer with USB-C and it appears as a small network.
 The web UI is at **http://tikprint.local** (or **http://192.168.7.1** if the name does not resolve).
 
-Status: **Milestone 5** (tickets print on the real thermal printer. Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi).
+Status: **Milestone 5** (tickets print on the real thermal printer. Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi. Firmware can be updated over the network, with an optional PIN).
 
 ## The one USB-C port is two devices
 
@@ -61,6 +61,46 @@ web: GET /
 4. Any device on that same network can now open http://tikprint.local.
    The board remembers the network and rejoins it after a reboot.
 
+## Update the firmware over Wi-Fi
+
+After the firmware with this feature has been flashed **once by cable**, later builds can be sent over the network.
+
+1. Build as usual: `idf.py build`. The file to send is `build/tikprint_firmware.bin`.
+2. Open http://tikprint.local, click the gear, then **Update firmware** and pick that file.
+3. The page shows the upload, waits while the board restarts (a few seconds), then reloads itself.
+
+Or from the terminal:
+
+```sh
+curl --data-binary @build/tikprint_firmware.bin http://tikprint.local/api/update
+curl -H "X-PIN: 123456" --data-binary @build/tikprint_firmware.bin http://tikprint.local/api/update   # if a PIN is set
+```
+
+How it works (`main/fw_update.c`, `partitions.csv`):
+
+- The flash has three firmware slots. The cable writes `factory`. A network update goes into
+  whichever of `ota_0` / `ota_1` is not running, is checked, and the board restarts into it.
+- **Safety net:** new firmware is on trial for 15 seconds. If it crashes or restarts before
+  that, the board goes back to the firmware it had. The page then says "Update undone".
+- **The cable always wins.** `idf.py flash` puts the board back on the `factory` slot, whatever
+  was sent over the network before. Use it if an update ever leaves the board unreachable.
+- Settings shows what is running, e.g. `v0.1.0 · a1b2c3d`. The second part is different for
+  every build, so you can see that an update took. Hover over it for the build time and the slot.
+- An update is refused while tickets are printing or waiting, and if the file is not TikPrint firmware.
+- The board answers nothing else during the upload (10 to 30 seconds over Wi-Fi).
+- Logs still need the cable (`idf.py monitor`).
+
+### PIN for updates (optional)
+
+- In Settings, switch on **Require PIN for updates** and choose a 6-digit PIN. From then on
+  the board refuses an update without it. Switch it off again with the PIN.
+- With the PIN off, anyone on the same network can update the board. Fine at home; use the PIN on a shared network.
+- The PIN is saved on the board (NVS), never in the code, and is never shown or logged (`main/pin.c`).
+- After 5 wrong PINs in a row the board accepts none for 5 minutes.
+- **Forgot it?** Plug in the USB-C cable, open http://192.168.7.1, and in any PIN box click
+  "Forgot it? Remove the PIN". This only works over the cable. Or: `curl -d '{"reset":true}' http://192.168.7.1/api/pin`
+- The PIN stops people on the network, not someone holding the board: with the cable they can flash it anyway.
+
 ## API quick reference
 
 ```sh
@@ -79,7 +119,14 @@ curl http://tikprint.local/api/diag/printer-status            # ask the printer 
 curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
+curl --data-binary @build/tikprint_firmware.bin http://tikprint.local/api/update   # install new firmware (see Update the firmware over Wi-Fi)
+curl -d '{"new":"123456"}' http://tikprint.local/api/pin                     # turn the PIN for updates on
+curl -d '{"current":"123456","new":""}' http://tikprint.local/api/pin        # turn it off ("new":"654321" changes it)
+curl -d '{"pin":"123456"}' http://tikprint.local/api/pin/check               # is this the right PIN?
 ```
+
+`/api/status` also reports the firmware: `"boot_id": 123456789` (new after every restart) and
+`"update": {"pin_required": false, "id": "a1b2c3d4e", "built": "Nov 21 2026 00:14:02", "slot": "ota_0", "on_trial": false, "max_bytes": 4194304}`.
 
 `POST /api/print` (what the Print button sends) answers as soon as the ticket is in the print queue:
 
@@ -277,6 +324,8 @@ curl http://tikprint.local/api/diag/printer-status
 | `main/counter.c` | Ticket counter saved on the board (NVS) |
 | `main/settings.c` | Settings saved on the board (NVS): what the ticket header shows |
 | `main/clock.c` | The clock: time from the browser or the internet, timezone saved on the board (NVS) |
+| `main/fw_update.c` | Firmware updates over the network: write to the spare slot, check, restart, go back if it fails |
+| `main/pin.c` | The optional PIN for updates, saved on the board (NVS) |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
 | `main/print_queue.c` | The print queue: tickets wait in line and print one at a time |
 | `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire and reads its status back |
@@ -287,7 +336,7 @@ curl http://tikprint.local/api/diag/printer-status
 | `web/vendor/` | pdf.js (library + worker), embedded the same way. To update: replace both files and change `PDFJS` in `web/index.html` |
 | `tools/gzip_file.py` | Build helper that gzips the UI |
 | `sdkconfig.defaults` | Board settings (flash, PSRAM, UART logs, USB mode) |
-| `partitions.csv` | How the flash is divided up |
+| `partitions.csv` | How the flash is divided up (saved settings, three firmware slots) |
 
 ## Notes
 

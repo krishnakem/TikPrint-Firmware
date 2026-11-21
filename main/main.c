@@ -13,6 +13,8 @@
 #include "wifi_mgr.h"
 #include "clock.h"
 #include "settings.h"
+#include "pin.h"
+#include "fw_update.h"
 #include "printer.h"
 #include "web_server.h"
 
@@ -37,6 +39,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_ERROR_CHECK(settings_init());
+    ESP_ERROR_CHECK(pin_init());
     ESP_ERROR_CHECK(clock_init());   // before Wi-Fi, so it hears "Wi-Fi got an address" and fetches internet time
     ESP_ERROR_CHECK(printer_init());
     ESP_ERROR_CHECK(usb_net_start());
@@ -44,6 +47,8 @@ void app_main(void)
     net_name_start(usb_net_get_netif());  // not fatal: the IP address still works without it
     ESP_ERROR_CHECK(wifi_mgr_start());
     ESP_ERROR_CHECK(web_server_start());
+    // Last, so that freshly updated firmware is only kept if everything above started.
+    ESP_ERROR_CHECK(fw_update_init());
 
     ESP_LOGI(TAG, "ready: plug the USB-C cable into a computer and open http://" NET_HOSTNAME ".local (or http://" USB_NET_IP_STR ")");
 }
