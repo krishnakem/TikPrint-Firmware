@@ -17,9 +17,11 @@
 static const char *TAG = "settings";
 
 #define NVS_NS "settings"
+#define DEFAULT_HEADER_FONT "Inter"
 
 static SemaphoreHandle_t s_lock;
-static settings_t s_now = { .location = "", .show_location = true, .show_date = true, .show_time = true };
+static settings_t s_now = { .location = "", .show_location = true, .show_date = true, .show_time = true,
+                            .header_font = DEFAULT_HEADER_FONT };
 
 /* Read one on/off setting, leaving *value alone if it was never saved. */
 static void load_flag(nvs_handle_t h, const char *key, bool *value)
@@ -41,14 +43,15 @@ static void save(const settings_t *s)
     nvs_set_u8(h, "show_loc", s->show_location);
     nvs_set_u8(h, "show_date", s->show_date);
     nvs_set_u8(h, "show_time", s->show_time);
+    nvs_set_str(h, "header_font", s->header_font);
     nvs_commit(h);
     nvs_close(h);
 }
 
-/* Plain text only: no line breaks or other control characters. */
-static bool location_ok(const char *text)
+/* Plain text only, shorter than max bytes: no line breaks or other control characters. */
+static bool plain_text(const char *text, size_t max)
 {
-    if (strlen(text) >= SETTINGS_LOCATION_MAX) {
+    if (strlen(text) >= max) {
         return false;
     }
     for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
@@ -68,22 +71,28 @@ void settings_get(settings_t *out)
 
 esp_err_t settings_set(const settings_t *in)
 {
-    if (!location_ok(in->location)) {
+    if (!plain_text(in->location, SETTINGS_LOCATION_MAX) || !plain_text(in->header_font, SETTINGS_FONT_MAX) ||
+        !in->header_font[0]) {
         return ESP_ERR_INVALID_ARG;
     }
+    // A tidy copy (unused bytes all zero), so "did anything change?" is a plain byte comparison.
+    settings_t tidy;
+    memset(&tidy, 0, sizeof(tidy));
+    strlcpy(tidy.location, in->location, sizeof(tidy.location));
+    strlcpy(tidy.header_font, in->header_font, sizeof(tidy.header_font));
+    tidy.show_location = in->show_location;
+    tidy.show_date = in->show_date;
+    tidy.show_time = in->show_time;
+
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool changed = memcmp(&s_now, in, sizeof(s_now)) != 0;
-    memset(&s_now, 0, sizeof(s_now));   // so the unused end of the location text always compares equal
-    strlcpy(s_now.location, in->location, sizeof(s_now.location));
-    s_now.show_location = in->show_location;
-    s_now.show_date = in->show_date;
-    s_now.show_time = in->show_time;
-    settings_t copy = s_now;
+    bool changed = memcmp(&s_now, &tidy, sizeof(tidy)) != 0;
+    memcpy(&s_now, &tidy, sizeof(tidy));
     xSemaphoreGive(s_lock);
     if (changed) {
-        save(&copy);   // flash is only written when something really changed
-        ESP_LOGI(TAG, "ticket header: location \"%s\" %s, date %s, time %s", copy.location,
-                 copy.show_location ? "on" : "off", copy.show_date ? "on" : "off", copy.show_time ? "on" : "off");
+        save(&tidy);   // flash is only written when something really changed
+        ESP_LOGI(TAG, "ticket header: location \"%s\" %s, date %s, time %s, font %s", tidy.location,
+                 tidy.show_location ? "on" : "off", tidy.show_date ? "on" : "off", tidy.show_time ? "on" : "off",
+                 tidy.header_font);
     }
     return ESP_OK;
 }
@@ -104,6 +113,11 @@ esp_err_t settings_init(void)
         load_flag(h, "show_loc", &s_now.show_location);
         load_flag(h, "show_date", &s_now.show_date);
         load_flag(h, "show_time", &s_now.show_time);
+        char font[SETTINGS_FONT_MAX];
+        n = sizeof(font);
+        if (nvs_get_str(h, "header_font", font, &n) == ESP_OK && font[0]) {
+            strlcpy(s_now.header_font, font, sizeof(s_now.header_font));
+        }
         nvs_close(h);
     }
     return ESP_OK;

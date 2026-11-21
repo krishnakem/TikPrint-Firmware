@@ -3,7 +3,7 @@
  *
  *   GET  /api/ping           empty reply; the UI calls it ~3x a second to notice unplugging fast
  *   GET  /api/status         board, USB, Wi-Fi, print queue and clock state
- *   POST /api/settings       {"location": "...", "show_location": true, "show_date": true, "show_time": true}
+ *   POST /api/settings       {"location": "...", "show_location": true, "show_date": true, "show_time": true, "header_font": "Inter"}
  *   POST /api/time           {"unix_ms": N, "timezone": "America/Detroit", "posix_tz": "EST5EDT,..."}
  *   GET  /api/wifi/scan      nearby networks
  *   POST /api/wifi/connect   {"ssid": "...", "password": "..."}
@@ -184,6 +184,7 @@ static void add_settings(cJSON *root)
     cJSON_AddBoolToObject(set, "show_location", s.show_location);
     cJSON_AddBoolToObject(set, "show_date", s.show_date);
     cJSON_AddBoolToObject(set, "show_time", s.show_time);
+    cJSON_AddStringToObject(set, "header_font", s.header_font);
 }
 
 /* ---------- GET /api/status ---------- */
@@ -236,9 +237,10 @@ static esp_err_t status_get(httpd_req_t *req)
 }
 
 /* ---------- POST /api/settings ----------
- * The ticket header: {"location": "Los Angeles", "show_location": true, "show_date": true, "show_time": true}.
+ * The ticket header: {"location": "Los Angeles", "show_location": true, "show_date": true, "show_time": true,
+ *                     "header_font": "Inter"}.
  * Send only what you want to change; the rest stays as it is.
- * Reply: {"ok":true,"settings":{...all four...}}, or {"ok":false,"error":"bad_location",...}. */
+ * Reply: {"ok":true,"settings":{...all four...}}, or {"ok":false,"error":"bad_setting",...}. */
 static esp_err_t settings_post(httpd_req_t *req)
 {
     cJSON *body = read_json_body(req);
@@ -251,9 +253,14 @@ static esp_err_t settings_post(httpd_req_t *req)
     const cJSON *jshow_loc = cJSON_GetObjectItem(body, "show_location");
     const cJSON *jshow_date = cJSON_GetObjectItem(body, "show_date");
     const cJSON *jshow_time = cJSON_GetObjectItem(body, "show_time");
-    bool too_long = cJSON_IsString(jloc) && strlen(jloc->valuestring) >= sizeof(s.location);
+    const cJSON *jfont = cJSON_GetObjectItem(body, "header_font");
+    bool too_long = (cJSON_IsString(jloc) && strlen(jloc->valuestring) >= sizeof(s.location)) ||
+                    (cJSON_IsString(jfont) && strlen(jfont->valuestring) >= sizeof(s.header_font));
     if (cJSON_IsString(jloc) && !too_long) {
         strlcpy(s.location, jloc->valuestring, sizeof(s.location));
+    }
+    if (cJSON_IsString(jfont) && !too_long) {
+        strlcpy(s.header_font, jfont->valuestring, sizeof(s.header_font));
     }
     s.show_location = cJSON_IsBool(jshow_loc) ? cJSON_IsTrue(jshow_loc) : s.show_location;
     s.show_date = cJSON_IsBool(jshow_date) ? cJSON_IsTrue(jshow_date) : s.show_date;
@@ -264,8 +271,8 @@ static esp_err_t settings_post(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", ok);
     if (!ok) {
-        cJSON_AddStringToObject(root, "error", "bad_location");
-        cJSON_AddStringToObject(root, "message", "The location is too long or not plain text");
+        cJSON_AddStringToObject(root, "error", "bad_setting");
+        cJSON_AddStringToObject(root, "message", "The location or font name is too long or not plain text");
     }
     add_settings(root);
     return send_json(req, root);

@@ -195,19 +195,22 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 Every ticket starts with one line, on screen and on paper:
 
 ```
-TikPrint | LOS ANGELES                 NOV 20, 2026 | 10:05 PM PST
+TikPrint | Los Angeles                 NOV 20, 2026 | 10:05 PM PST
 ```
 
 - `TikPrint` is always there. Location, date and time each have a switch in Settings (the gear).
-- Location is what you type in Settings. Left empty, it is the city of the timezone.
+- Location is what you type in Settings, shown as typed. Left empty, it is the city of the timezone.
+- To change the header's font: click the header on the ticket (it lights up), then pick a font in
+  the toolbar. The other tools fade while the header is selected, since only the font applies to it.
+  Click anywhere else to go back to the text.
 - Date and time are the board's clock in the board's timezone, never the computer's. They are
   left out while the clock is not set. The page draws them when Print is pressed, so a ticket
   that waits in the queue shows when it was sent.
 - The settings are saved on the board (`main/settings.c`, NVS), so every device sees the same.
-  `/api/status` reports them as `"settings": {"location": "", "show_location": true, "show_date": true, "show_time": true}`.
+  `/api/status` reports them as `"settings": {"location": "", "show_location": true, "show_date": true, "show_time": true, "header_font": "Inter"}`.
 - To change them without the page (send only what you want to change):
   `curl -d '{"location":"Ann Arbor","show_time":false}' http://tikprint.local/api/settings`
-- Tickets sent with `curl` get the same line in the printer's built-in font.
+- Tickets sent with `curl` get the same line in the printer's built-in font (which has only one font).
 - Its size on paper is `HDR_SIZE` in `web/index.html`.
 
 ## Printer status

@@ -57,7 +57,11 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 }
 .paper.in{animation:rollout .55s cubic-bezier(.2,.75,.25,1)}
 @media (prefers-reduced-motion:reduce){.paper.out,.paper.back,.paper.in{animation-duration:.01s}}
-.p-head{display:flex;justify-content:space-between;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
+.p-head{display:flex;justify-content:space-between;gap:10px;font:700 10px "Inter",Helvetica,Arial,sans-serif;letter-spacing:.03em;color:#999;white-space:nowrap;margin:-4px -6px 0;padding:4px 6px;border-radius:5px;cursor:pointer;outline:none;transition:background .12s,color .12s}
+.p-head:hover{color:#666}
+/* The header is "selected" (click it): the toolbar's font menu then changes the header's font */
+.p-head.sel{background:rgba(60,120,255,.16);color:#333}
+.p-head span:first-child{overflow:hidden;text-overflow:ellipsis}
 /* The text you type. #doc is laid out at the paper's real size (576 px = 576 printer dots) and
    shrunk to fit the ticket on screen, so lines break exactly where they will on paper. */
 /* overflow:clip, not hidden: a "hidden" box can still scroll inside itself, which pushed the first line out of view */
@@ -75,6 +79,8 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .tools button:hover{background:var(--hover)}
 .tools button.on{background:var(--btn);color:var(--btn-ink)}
 .tools .sep{width:1px;height:18px;flex:none;background:var(--line);margin:0 2px}
+/* While the ticket header is selected only the font menu applies to it: the rest of the toolbar steps back */
+.tools.hdr button,.tools.hdr #fSize{opacity:.28;pointer-events:none}
 .p-img{position:relative;margin-top:10px;display:none}
 .p-img.on{display:block}
 /* same width as the text above it: both are 576 printer dots wide */
@@ -231,7 +237,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
 
   <!-- The ticket is the editor -->
   <div class="paper" id="paper">
-    <div class="p-head"><span id="hLeft">TikPrint</span><span id="hRight"></span></div>
+    <div class="p-head" id="pHead" tabindex="0" role="button" aria-label="Ticket header. Select it, then pick its font in the toolbar" title="Click, then pick a font in the toolbar"><span id="hLeft">TikPrint</span><span id="hRight"></span></div>
     <div class="docwrap" id="docWrap"><div id="doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Ticket text"></div></div>
     <div class="p-img" id="pImg"><canvas id="prev" width="576" height="1" role="img" aria-label="Exactly what will print"></canvas><div class="p-wait" id="pWait">Preparing…</div><div class="p-nav" id="pNav"><button id="pPrev" aria-label="Previous part">‹</button><span id="pPart"></span><button id="pNext" aria-label="Next part">›</button></div><div class="p-note" id="pNote"></div><button id="rmImg" aria-label="Remove file">✕</button></div>
     <div class="p-src" id="pSrc"><span id="srcName"></span><button id="rmSrc">clear</button></div>
@@ -317,21 +323,22 @@ let ticket=1, wifi=null;
 const pad=n=>'#'+String(n).padStart(4,'0');
 /* ---------- Ticket header ---------- */
 /* The line at the top of the ticket, on screen and on paper:
-     TikPrint | LOS ANGELES                 NOV 20, 2026 | 10:05 PM PST
+     TikPrint | Los Angeles                 NOV 20, 2026 | 10:05 PM PST
    "TikPrint" is always there. Location, date and time each have a switch in Settings, saved on the board.
+   Its font: click the header to select it, then pick a font in the toolbar (see "Header font" further down).
    Date and time are the BOARD's clock in the board's timezone (its last report plus the seconds since),
    not this device's, and are left out while the board's clock isn't set.
-   With no location typed in, the city of the timezone is used ("America/Los_Angeles" -> LOS ANGELES). */
-let hdr={location:'',show_location:true,show_date:true,show_time:true}, tzCity='';
+   With no location typed in, the city of the timezone is used ("America/Los_Angeles" -> Los Angeles). */
+let hdr={location:'',show_location:true,show_date:true,show_time:true,header_font:'Inter'}, tzCity='';
 let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "PST"}
 function headerParts(){
   const now=boardTime?new Date(boardTime.wall+performance.now()-boardTime.at):null, fmt=o=>now.toLocaleString('en-US',{timeZone:'UTC',...o}).toUpperCase();
-  const place=(hdr.location||tzCity).toUpperCase();
+  const place=hdr.location||tzCity;   // shown as typed
   const date=now&&hdr.show_date?fmt({month:'short',day:'numeric',year:'numeric'}):'';
   const time=now&&hdr.show_time?fmt({hour:'numeric',minute:'2-digit'})+(boardTime.zone?' '+boardTime.zone:''):'';
   return {left:'TikPrint'+(hdr.show_location&&place?' | '+place:''), right:[date,time].filter(Boolean).join(' | ')};
 }
-const showHeader=()=>{const h=headerParts();$('hLeft').textContent=h.left;$('hRight').textContent=h.right};
+const showHeader=()=>{const h=headerParts();$('hLeft').textContent=h.left;$('hRight').textContent=h.right;$('pHead').style.fontFamily=`"${hdr.header_font}",Helvetica,Arial,sans-serif`};
 const showDate=showHeader;
 showHeader(); setInterval(showHeader,5000);   // keeps the minute current between status updates
 const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -422,6 +429,22 @@ function showClock(t){
 }
 setInterval(()=>{if(!offline)sendTime()},TIME_SEND_MS);
 
+/* ---------- Header font ---------- */
+/* The header is not typed text, so it can't be selected with the cursor like the rest of the ticket.
+   Instead: click it (or Tab to it and press Enter) and it lights up as selected. The toolbar's font
+   menu then shows and changes the header's font, and the other tools fade out because they don't
+   apply to it. Clicking anywhere else goes back to the ticket's text. The font is saved on the board. */
+let headerSelected=false;
+function selectHeader(on){
+  if(on===headerSelected)return; headerSelected=on;
+  $('pHead').classList.toggle('sel',on); $('tools').classList.toggle('hdr',on);
+  if(on){getSelection().removeAllRanges(); $('fFont').value=hdr.header_font}
+  else showState();   // the toolbar shows the text's style again
+}
+$('pHead').onclick=()=>selectHeader(true);
+$('pHead').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectHeader(true)} if(e.key==='Escape')selectHeader(false)};
+document.addEventListener('mousedown',e=>{if(!e.target.closest('#pHead,#tools'))selectHeader(false)});
+
 /* ---------- Settings: ticket header ---------- */
 /* The switches and the location live on the board, so every device and every ticket agree.
    A change is sent at once; the board's reply is what the page then shows. */
@@ -429,7 +452,8 @@ let savingSettings=0;
 function applySettings(x){
   if(savingSettings)return;   // don't let an older status report undo a change that is on its way
   const typing=document.activeElement===$('setLoc');   // keep what is being typed, in the box and in the preview
-  hdr=typing?{...x,location:$('setLoc').value.trim()}:x; showHeader();
+  x={...x,header_font:FONTS.some(f=>f.name===x.header_font)?x.header_font:FONTS[0].name};   // only fonts the page has
+  hdr=typing?{...x,location:$('setLoc').value.trim()}:x; showHeader(); if(headerSelected)$('fFont').value=hdr.header_font;
   if(!typing)$('setLoc').value=x.location;
   $('swLoc').checked=x.show_location; $('swDate').checked=x.show_date; $('swTime').checked=x.show_time;
 }
@@ -863,7 +887,7 @@ const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, 
 const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
 const TITLE_PX=Math.round(16*DOTS_PER_PT);         // heading size used when a connector fills the ticket
 const HEAD_SIZE=20;     // the "#0042  TODOIST · TODAY" line, in dots
-const HDR_SIZE=17;      // the "TikPrint | LOS ANGELES ... NOV 20, 2026 | 10:05 PM PST" line above it, in dots
+const HDR_SIZE=17;      // the "TikPrint | Los Angeles ... NOV 20, 2026 | 10:05 PM PST" line above it, in dots
 const HDR_H=Math.round(HDR_SIZE*1.4)+8;   // room that line takes
 const HDR_GAP=24;       // least space between its left and right halves
 const TEXT_CUT=140;     // text is drawn in greys; darker than this (0-255) becomes a black dot. Higher = bolder
@@ -969,7 +993,7 @@ function showState(){
 }
 $('fFont').innerHTML=FONTS.map(f=>`<option>${f.name}</option>`).join('');
 $('fSize').innerHTML=SIZES.map(p=>`<option>${p}</option>`).join(''); $('fSize').value=10;
-$('fFont').onchange=e=>format('fontName',e.target.value);
+$('fFont').onchange=e=>headerSelected?saveSettings({header_font:e.target.value}):format('fontName',e.target.value);
 $('fSize').onchange=e=>{
   sizePx=Math.round(e.target.value*DOTS_PER_PT);
   sizeHold=savedSel&&savedSel.collapsed?{node:savedSel.startContainer,at:savedSel.startOffset}:null;
@@ -986,7 +1010,7 @@ $('tools').addEventListener('click',e=>{const b=e.target.closest('button'); if(b
    date and time at the right edge. A location too long to fit is cut short with "…". */
 function drawHeader(g){
   let {left,right}=headerParts();
-  g.font=`700 ${HDR_SIZE}px "Inter",Helvetica,Arial,sans-serif`;
+  g.font=`700 ${HDR_SIZE}px "${hdr.header_font}",Helvetica,Arial,sans-serif`;
   const room=PW-(right?g.measureText(right).width+HDR_GAP:0);
   while(left.length>9&&g.measureText(left).width>room)left=left.slice(0,-2)+'…';
   g.fillText(left,0,2+HDR_SIZE);
