@@ -152,7 +152,7 @@ static esp_err_t diag_ping_get(httpd_req_t *req)
 }
 
 /* The "time" part of /api/status:
- *   {"set":true,"source":"browser","now":"2026-11-20T22:05:31-05:00","timezone":"America/Detroit","last_sync_s_ago":12}
+ *   {"set":true,"source":"browser","now":"2026-11-20T22:05:31-05:00","zone":"EST","timezone":"America/Detroit","last_sync_s_ago":12}
  * Until something sets the clock: "set" is false, "source" is "none", "now" and "last_sync_s_ago" are null. */
 static void add_clock_status(cJSON *root)
 {
@@ -164,6 +164,7 @@ static void add_clock_status(cJSON *root)
     cJSON_AddStringToObject(time, "timezone", c.timezone);
     if (c.set) {
         cJSON_AddStringToObject(time, "now", c.now);
+        cJSON_AddStringToObject(time, "zone", c.zone);   // short zone name for tickets, e.g. "EST"
         cJSON_AddNumberToObject(time, "last_sync_s_ago", c.last_sync_s_ago);
     } else {
         cJSON_AddNullToObject(time, "now");

@@ -229,6 +229,10 @@ void clock_get_status(clock_status_t *out)
     out->last_sync_s_ago = -1;
     if (out->set) {
         format_iso_locked(out->now, sizeof(out->now));
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        strftime(out->zone, sizeof(out->zone), "%Z", &tm);
         out->last_sync_s_ago = (int32_t)((esp_timer_get_time() - s_last_sync_us) / 1000000);
     }
     unlock();

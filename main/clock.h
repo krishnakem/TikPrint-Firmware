@@ -19,6 +19,7 @@ typedef struct {
     clock_source_t source;
     char now[32];                  // local time, e.g. "2026-11-20T22:05:31-05:00". "" if not set
     char timezone[CLOCK_TZ_MAX];   // IANA name, e.g. "America/Detroit". "UTC" until one is saved
+    char zone[12];                 // short name of the zone right now, e.g. "EST" or "EDT". "" if not set
     int32_t last_sync_s_ago;       // seconds since the time was last set. -1 if not set
 } clock_status_t;
 

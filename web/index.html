@@ -323,7 +323,7 @@ async function api(path,body,ms=4000){
    summer-time switch, which this page corrects the next time it is open after the switch. */
 const TIME_SEND_MS=5*60*1000;   // how often the page re-sends the time while it is open
 const TIME_RETRY_MS=30*1000;    // if the board says its clock isn't set, wait at least this long before re-sending
-const HEAD_SHOW_TIME=true;      // print the board's time next to the ticket number, e.g. "#0042   NOV 20, 10:05 PM" (only if the board's clock is set)
+const HEAD_SHOW_TIME=true;      // print the board's time next to the ticket number, e.g. "#0042   NOV 20, 10:05 PM EST" (only if the board's clock is set)
 const TZ_RULES={
   'EST5EDT,M3.2.0,M11.1.0':'America/New_York America/Detroit America/Toronto America/Indiana/Indianapolis America/Kentucky/Louisville',
   'CST6CDT,M3.2.0,M11.1.0':'America/Chicago America/Winnipeg',
@@ -375,7 +375,7 @@ function posixTz(iana){
   return fixedTz();
 }
 let clockSet=false, timeSentAt=0;
-let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it}
+let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "EST"}
 async function sendTime(){
   timeSentAt=Date.now();
   let zone='UTC'; try{zone=Intl.DateTimeFormat().resolvedOptions().timeZone||zone}catch(e){}
@@ -388,7 +388,7 @@ function showClock(t){
   clockSet=!!t.set;
   // "2026-11-20T22:05:31-05:00" -> the 22:05:31 part as a number, so the page can keep counting from it
   const m=t.set&&/^(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)/.exec(t.now);
-  boardTime=m?{wall:Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5],+m[6]),at:performance.now()}:null;
+  boardTime=m?{wall:Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5],+m[6]),at:performance.now(),zone:t.zone||''}:null;
   $('setClock').textContent=t.set?t.now.slice(11,16)+' · '+t.timezone.split('/').pop().replace(/_/g,' '):'Not set';
   $('setClock').title=t.set?`From the ${t.source==='internet'?'internet':'browser'}`:'Open this page or connect Wi-Fi to turn on schedules';
 }
@@ -924,9 +924,9 @@ $('tools').addEventListener('click',e=>{const b=e.target.closest('button'); if(b
 /* Turn the ticket's text into dots, PW wide. Returns {height, data} like rasterize(), or null if too long.
    The browser has already laid the text out at paper size, so we ask it where every word sits
    and draw each word at that spot. What you see is what prints. */
-/* The time for the head line, e.g. "   NOV 20, 10:05 PM". It is the BOARD's clock, in the board's timezone
+/* The time for the head line, e.g. "   NOV 20, 10:05 PM EST". It is the BOARD's clock, in the board's timezone
    (its last report plus the seconds since), not this device's. Empty if switched off or the board's clock isn't set. */
-const headTime=()=>HEAD_SHOW_TIME&&boardTime?'   '+new Date(boardTime.wall+performance.now()-boardTime.at).toLocaleString('en-US',{timeZone:'UTC',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).toUpperCase():'';
+const headTime=()=>HEAD_SHOW_TIME&&boardTime?'   '+new Date(boardTime.wall+performance.now()-boardTime.at).toLocaleString('en-US',{timeZone:'UTC',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).toUpperCase()+(boardTime.zone?' '+boardTime.zone:''):'';
 function docBits(source){
   const box=doc.getBoundingClientRect(), k=box.width/PW, head=Math.round(HEAD_SIZE*1.4)+14;
   const measure=mkCanvas(1,1).getContext('2d'), range=document.createRange(), items=[];

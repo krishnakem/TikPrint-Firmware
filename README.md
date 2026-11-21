@@ -110,10 +110,10 @@ Two things set it again:
   in `web/index.html`). A zone that is not in the table gets today's offset with no summer-time
   switch, which corrects itself the next time the page is open after the switch.
 - `/api/status` reports the clock:
-  `"time": {"set": true, "source": "browser", "now": "2026-11-20T22:05:31-05:00", "timezone": "America/Detroit", "last_sync_s_ago": 12}`.
+  `"time": {"set": true, "source": "browser", "now": "2026-11-20T22:05:31-05:00", "zone": "EST", "timezone": "America/Detroit", "last_sync_s_ago": 12}`.
   `source` is `browser`, `internet` or `none`. While not set, `now` and `last_sync_s_ago` are `null`.
 - In the UI the board's time is in Settings (the gear), e.g. `22:05 · Detroit`.
-- If the clock is set, the ticket's head line carries the time (`#0042   NOV 20, 10:05 PM`). It is
+- If the clock is set, the ticket's head line carries the time (`#0042   NOV 20, 10:05 PM EST`). It is
   the board's time in the board's timezone, never the computer's. The page draws it when Print is
   pressed, so a ticket that waits in the queue shows when it was sent, not when it came out.
   To switch that off: `HEAD_SHOW_TIME` in `web/index.html` (tickets drawn by the page) and
