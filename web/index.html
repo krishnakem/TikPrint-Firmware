@@ -39,9 +39,22 @@ button{cursor:pointer;background:none;border:0;padding:0}
 main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;padding:96px 20px 80px}
 
 /* the ticket you type on */
-.paper{width:340px;background:var(--paper);color:var(--paper-ink);padding:18px 18px 26px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .8s cubic-bezier(.5,0,.3,1),opacity .35s}
+.paper{width:340px;background:var(--paper);color:var(--paper-ink);padding:18px 18px 26px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .3s}
 .paper::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:8px;background:linear-gradient(135deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x,linear-gradient(225deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x}
-.paper.out{transform:translateY(-40px);opacity:0}
+/* Printing: the ticket flies up and off the top of the screen (--away is set to the distance when Print is pressed). */
+@keyframes fly{to{transform:translateY(var(--away))}}
+.paper.out{animation:fly var(--feed,.8s) cubic-bezier(.55,0,.7,.4) forwards}
+.paper.back{animation:fly .4s cubic-bezier(.2,.8,.2,1) reverse}   /* printing failed: the same ticket drops back in */
+/* Then a fresh ticket rises out of the top edge of the "Drop JPG, PNG, or PDF" box below it.
+   It starts shifted down by its own height and is cut off at the box's top edge (22px under the ticket's
+   resting place = the box's margin), so it appears to grow up out of that line. */
+@keyframes rollout{
+  from{transform:translateY(calc(100% + 22px));clip-path:inset(-60px -60px 100% -60px);opacity:0}
+  15%{opacity:1}
+  to{transform:translateY(0);clip-path:inset(-60px -60px -22px -60px);opacity:1}
+}
+.paper.in{animation:rollout .55s cubic-bezier(.2,.75,.25,1)}
+@media (prefers-reduced-motion:reduce){.paper.out,.paper.back,.paper.in{animation-duration:.01s}}
 .p-head{display:flex;justify-content:space-between;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
 /* The text you type. #doc is laid out at the paper's real size (576 px = 576 printer dots) and
    shrunk to fit the ticket on screen, so lines break exactly where they will on paper. */
@@ -256,7 +269,8 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     m.sx+=(m.x-m.sx)*.18;m.sy+=(m.y-m.sy)*.18;
     const ox=(W%SP)/2,oy=(H%SP)/2;
     // objects the dots stop at (with a small gap so they end cleanly at the edge)
-    const GAP=5, rects=[...document.querySelectorAll(SOLID)].filter(el=>el.offsetParent||getComputedStyle(el).position==='fixed').map(el=>{const r=el.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:r.bottom+(el.id==='paper'?8:0),width:r.width,height:r.height}}).filter(r=>r.width&&r.height);
+    // slot = the line a fresh ticket rises out of (top of the drop box); while it does, the part still below that line is hidden
+    const GAP=5, slot=document.getElementById('drop').getBoundingClientRect().top, rects=[...document.querySelectorAll(SOLID)].filter(el=>el.offsetParent||getComputedStyle(el).position==='fixed').map(el=>{const r=el.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:el.id==='paper'?(el.classList.contains('in')?Math.min(r.bottom,slot):r.bottom+8):r.bottom,width:r.width,height:r.height}}).filter(r=>r.width&&r.height&&r.bottom>r.top);
     const blocked=(px,py)=>rects.some(r=>px>r.left-GAP&&px<r.right+GAP&&py>r.top-GAP&&py<r.bottom+GAP);
     for(let y=oy;y<H+SP;y+=SP)for(let x=ox;x<W+SP;x+=SP){
       const dx=x-m.sx,dy=y-m.sy,d=Math.hypot(dx,dy);
@@ -851,19 +865,22 @@ function printBody(){
   if(file)buf.set(file.data,4+json.length+(text?text.data.length:0));
   return buf;
 }
+const FEED_MS=px=>Math.round(Math.min(1100,Math.max(550,px*1.1)));   // how long the ticket takes to fly off, from the distance in pixels
 async function doPrint(){
   if(printing||offline)return;
   if(!docText()&&!$('pImg').classList.contains('on')){doc.focus();return}
   if($('pImg').classList.contains('on')&&!imgBits){toast('Still preparing the file…');return}
   const body=printBody(); if(!body){toast('Too much text for one ticket');return}
-  printing=true; $('printBtn').disabled=true; $('paper').classList.add('out');
+  printing=true; $('printBtn').disabled=true;
+  const away=$('paper').getBoundingClientRect().bottom+40;   // far enough to clear the top of the screen
+  $('paper').style.setProperty('--away',-away+'px'); $('paper').style.setProperty('--feed',FEED_MS(away)+'ms'); $('paper').classList.add('out');
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),20000);
   let r;
   try{
     // run the request and the "ticket leaves" animation together
     const [res]=await Promise.all([
       fetch('/api/print',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body,signal:ctl.signal}).then(x=>x.json()),
-      new Promise(f=>setTimeout(f,800))]);
+      new Promise(f=>setTimeout(f,FEED_MS(away)+60))]);
     r=res;
   }catch(e){r={ok:false,message:'Couldn’t reach the printer'}}
   clearTimeout(timer);
@@ -876,12 +893,13 @@ async function doPrint(){
     setDoc('');
     if(more)showPart(job.cur+1); else $('rmImg').click();
     $('pSrc').classList.remove('on');
-    // a fresh ticket slides up into place
-    p.style.transition='none'; p.classList.remove('out'); p.style.transform='translateY(30px)'; p.style.opacity=0;
-    p.offsetHeight; p.style.transition=''; p.style.transform=''; p.style.opacity='';
+    // a fresh ticket rises out of the drop box
+    p.classList.remove('out'); p.classList.add('in');
+    p.addEventListener('animationend',()=>p.classList.remove('in'),{once:true});
     doc.focus();
   }else{
-    p.classList.remove('out');   // the same ticket comes back, nothing is lost
+    p.classList.remove('out'); p.classList.add('back');   // the same ticket drops back in, nothing is lost
+    p.addEventListener('animationend',()=>p.classList.remove('back'),{once:true});
     toast(r.message||'Printing failed');
   }
   printing=false; $('printBtn').disabled=false;
