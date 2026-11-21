@@ -3,7 +3,8 @@ idf_component_register(
          "wifi_mgr.c" "counter.c" "clock.c" "settings.c" "api.c"
          "fw_update.c" "fw_github.c"
          "printer.c" "print_queue.c" "printer_fake.c" "printer_thermal.c"
-         "zip_table.c" "weather.c" "weather_ticket.c" "weather_icons.c" "automations.c"
+         "zip_table.c" "city_table.c" "weather.c" "weather_ticket.c" "weather_icons.c" "automations.c"
+         "ticket_draw.c" "ticket_header.c" "weather_render.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_netif esp_event nvs_flash esp_http_server lwip esp_psram
                   esp_wifi esp_timer esp_app_format esp_driver_uart esp_driver_gpio
@@ -49,3 +50,11 @@ target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/../data/zip
 # --- Weather symbols (sun, cloud, rain, ...) printed on weather tickets (see main/weather_icons.c). ---
 # Drawn by tools/make_weather_icons.py.
 target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/../data/weather_icons.bin" BINARY)
+
+# --- Town name -> latitude/longitude table, for adding a weather place by name (see main/city_table.c). ---
+# Made by tools/make_city_table.py from the US Census places gazetteer (public domain).
+target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/../data/city_table.bin" BINARY)
+
+# --- The letters tickets are drawn with when the board draws them itself (see main/ticket_draw.c). ---
+# Made by tools/make_ticket_fonts.py from the fonts in web/fonts. Run it again after adding a font.
+target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/../data/ticket_fonts.bin" BINARY)

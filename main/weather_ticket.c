@@ -56,6 +56,7 @@
 typedef struct {
     char *at;
     size_t left;   // always at least 1: the ending 0
+    bool rich;     // write the "rich" form (see weather_ticket.h): marks and tabs instead of spaces, no line breaking
 } out_t;
 
 /* Add text, printf style. Text that does not fit is cut off. */
@@ -100,6 +101,21 @@ static void put_wrapped(out_t *o, const char *text, int used, int indent)
 {
     int line_start = used, col = used;
     const char *p = text;
+    if (o->rich) {
+        // Whoever draws it breaks the lines (letters have different widths there): just tidy the gaps.
+        bool gap = false, any = false;
+        for (; *p; p++) {
+            if (is_gap(*p)) {
+                gap = true;
+                continue;
+            }
+            put(o, "%s%c", gap && any ? " " : "", *p);
+            gap = false;
+            any = true;
+        }
+        put(o, "\n");
+        return;
+    }
     for (;;) {
         while (*p && is_gap(*p)) {
             p++;
@@ -200,7 +216,7 @@ static const char *put_alerts(out_t *o, const cJSON *alerts)
                 continue;
             }
             listed[count++] = event;
-            put(o, "ALERT: ");
+            put(o, "%sALERT: ", o->rich ? WEATHER_MARK_LABEL : "");
             put_wrapped(o, event, 7, 7);
             // "ends" is when the weather itself is expected to be over. Some alerts only say when the notice runs out.
             const char *until = text_of(props, "ends");
@@ -371,7 +387,7 @@ static void put_hours(out_t *o, const char *hourly_json, time_t now, weather_ico
             continue;
         }
         if (shown++ == 0) {
-            put(o, "NEXT HOURS\n");
+            put(o, "%sNEXT HOURS\n", o->rich ? WEATHER_MARK_LABEL : "");
             *icon = icon_for(hour);   // the ticket's symbol is the weather of the coming hour
         }
         const cJSON *rain = cJSON_GetObjectItem(cJSON_GetObjectItem(hour, "probabilityOfPrecipitation"), "value");
@@ -385,6 +401,11 @@ static void put_hours(out_t *o, const char *hourly_json, time_t now, weather_ico
         while (words[bytes] && (cols < HOUR_TEXT_COLS || ((unsigned char)words[bytes] & 0xC0) == 0x80)) {
             cols += ((unsigned char)words[bytes] & 0xC0) != 0x80;
             bytes++;
+        }
+        if (o->rich) {   // the drawer lines the four parts up in columns and cuts the words to fit
+            put(o, WEATHER_MARK_HOUR "%d %s\t%d\xC2\xB0\t%s\t%s\n", h % 12 == 0 ? 12 : h % 12, h < 12 ? "AM" : "PM",
+                temp->valueint, chance, words);
+            continue;
         }
         put(o, "%2d %s  %3d\xC2\xB0  %4s  %.*s\n", h % 12 == 0 ? 12 : h % 12, h < 12 ? "AM" : "PM", temp->valueint,
             chance, bytes, words);
@@ -422,7 +443,9 @@ static void put_period(out_t *o, const cJSON *period)
 
     // Name on the left, numbers pushed to the right edge. If both do not fit on one line, use two.
     int gap = COLS - columns(name, sizeof(name)) - columns(right, sizeof(right));
-    if (!right[0]) {
+    if (o->rich) {
+        put(o, WEATHER_MARK_LABEL "%s%s%s\n", name, right[0] ? "\t" : "", right);
+    } else if (!right[0]) {
         put(o, "%s\n", name);
     } else if (gap >= 2) {
         put(o, "%s%*s%s\n", name, gap, "", right);
@@ -445,7 +468,7 @@ const char *weather_kind_name(weather_kind_t kind)
 }
 
 bool weather_ticket_build(weather_kind_t kind, const char *forecast_json, const char *hourly_json,
-                          const char *alerts_json, time_t now, weather_icon_t *icon,
+                          const char *alerts_json, time_t now, bool rich, weather_icon_t *icon,
                           char *title, size_t title_size, char *body, size_t body_size)
 {
     *icon = WEATHER_ICON_NONE;
@@ -453,7 +476,7 @@ bool weather_ticket_build(weather_kind_t kind, const char *forecast_json, const 
         return false;
     }
     title[0] = body[0] = 0;
-    out_t o = { .at = body, .left = body_size };
+    out_t o = { .at = body, .left = body_size, .rich = rich };
 
     cJSON *forecast = cJSON_Parse(forecast_json);
     cJSON *alerts = alerts_json ? cJSON_Parse(alerts_json) : NULL;

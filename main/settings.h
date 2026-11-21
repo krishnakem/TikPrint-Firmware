@@ -32,12 +32,44 @@ esp_err_t settings_set(const settings_t *in);
 
 #define SETTINGS_ZIP_MAX 6   // a US ZIP code is five digits, plus the ending 0
 
-/** The ZIP code weather tickets are for, e.g. "48104". "" = none chosen yet. */
-void settings_get_weather_zip(char out[SETTINGS_ZIP_MAX]);
+#define SETTINGS_PLACES_MAX     5    // places that can be saved
+#define SETTINGS_PLACE_NAME_MAX 48   // room for a place name ("Ann Arbor, MI"), including the ending 0
 
-/** Change it and remember it across reboots. "" clears it.
- *  ESP_ERR_INVALID_ARG if it is neither "" nor five digits. (Whether such a ZIP code exists is for zip_table.h.) */
-esp_err_t settings_set_weather_zip(const char *zip);
+/** A place weather tickets can be for. Added by ZIP code or by town name. */
+typedef struct {
+    char name[SETTINGS_PLACE_NAME_MAX];   // "Ann Arbor, MI". "" for a ZIP code until the weather service has named its town
+    char zip[SETTINGS_ZIP_MAX];           // "48104", or "" if it was added by town name
+    int16_t lat_e2, lon_e2;               // where it is, in 1/100 degree
+} settings_place_t;
+
+typedef struct {
+    uint8_t count;                        // places saved, 0..SETTINGS_PLACES_MAX
+    uint8_t selected;                     // the one weather tickets (and the ticket header) are for right now
+    settings_place_t place[SETTINGS_PLACES_MAX];
+} settings_places_t;
+
+void settings_get_places(settings_places_t *out);
+
+/** Change the list and remember it across reboots. ESP_ERR_INVALID_ARG if count or selected is out of range. */
+esp_err_t settings_set_places(const settings_places_t *in);
+
+/** The selected place. False if no place has been added yet. */
+bool settings_get_place(settings_place_t *out);
+
+/** The weather service told us the town of a place added by ZIP code: remember its name. */
+void settings_name_place(const settings_place_t *which, const char *name);
+
+/** How weather tickets look. */
+typedef struct {
+    char font[SETTINGS_FONT_MAX];   // "Inter", ... (one of FONTS in web/index.html); "Printer" = the printer's built-in font
+    uint8_t size;                   // 0 = small, 1 = medium, 2 = large (not used by the built-in font)
+    bool hours;                     // show the hour-by-hour list
+} settings_weather_look_t;
+
+void settings_get_weather_look(settings_weather_look_t *out);
+
+/** ESP_ERR_INVALID_ARG if the size is not 0..2 or the font name is empty or too long. */
+esp_err_t settings_set_weather_look(const settings_weather_look_t *in);
 
 #define SETTINGS_WEATHER_SLOTS 3   // scheduled weather prints a day
 

@@ -14,6 +14,7 @@
 #include "freertos/semphr.h"
 
 #include "settings.h"
+#include "zip_table.h"
 
 static const char *TAG = "settings";
 
@@ -23,12 +24,18 @@ static const char *TAG = "settings";
 static SemaphoreHandle_t s_lock;
 static settings_t s_now = { .location = "", .show_location = true, .show_date = true, .show_time = true,
                             .header_font = DEFAULT_HEADER_FONT };
-static char s_weather_zip[SETTINGS_ZIP_MAX] = "";
+static settings_places_t s_places;   // the weather places; none until one is added
+static settings_weather_look_t s_weather_look = { .font = DEFAULT_HEADER_FONT, .size = 1, .hours = true };
 /* The weather schedule. Until it is changed: on, at 7:30 AM, 12:30 PM and 8:30 PM. */
 static settings_weather_schedule_t s_weather_schedule = {
     .on = true,
     .slot = { { 7 * 60 + 30, true }, { 12 * 60 + 30, true }, { 20 * 60 + 30, true } },
 };
+
+static bool places_are_valid(const settings_places_t *p)
+{
+    return p->count <= SETTINGS_PLACES_MAX && (p->count == 0 || p->selected < p->count);
+}
 
 static bool schedule_is_valid(const settings_weather_schedule_t *s)
 {
@@ -135,10 +142,24 @@ esp_err_t settings_init(void)
         if (nvs_get_str(h, "header_font", font, &n) == ESP_OK && font[0]) {
             strlcpy(s_now.header_font, font, sizeof(s_now.header_font));
         }
+        settings_places_t places;
         char zip[SETTINGS_ZIP_MAX];
-        n = sizeof(zip);
-        if (nvs_get_str(h, "wx_zip", zip, &n) == ESP_OK) {
-            strlcpy(s_weather_zip, zip, sizeof(s_weather_zip));
+        int lat_e2, lon_e2;
+        n = sizeof(places);
+        if (nvs_get_blob(h, "wx_places", &places, &n) == ESP_OK && n == sizeof(places) && places_are_valid(&places)) {
+            s_places = places;
+        } else if ((n = sizeof(zip), nvs_get_str(h, "wx_zip", zip, &n) == ESP_OK) && zip_table_lookup(zip, &lat_e2, &lon_e2)) {
+            // Saved by an older firmware, which knew one ZIP code only: it becomes the first place.
+            s_places.count = 1;
+            strlcpy(s_places.place[0].zip, zip, sizeof(s_places.place[0].zip));
+            s_places.place[0].lat_e2 = (int16_t)lat_e2;
+            s_places.place[0].lon_e2 = (int16_t)lon_e2;
+        }
+        settings_weather_look_t look;
+        n = sizeof(look);
+        if (nvs_get_blob(h, "wx_look", &look, &n) == ESP_OK && n == sizeof(look) && look.size <= 2) {
+            look.font[sizeof(look.font) - 1] = 0;
+            s_weather_look = look;
         }
         settings_weather_schedule_t sched;
         n = sizeof(sched);
@@ -151,6 +172,102 @@ esp_err_t settings_init(void)
 }
 
 /* ---------- Automations: weather ---------- */
+
+/* Save a block of settings under a name. If that fails it still applies until the next restart. */
+static void save_block(const char *key, const void *block, size_t size)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "could not save \"%s\"", key);
+        return;
+    }
+    nvs_set_blob(h, key, block, size);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+void settings_get_places(settings_places_t *out)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *out = s_places;
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t settings_set_places(const settings_places_t *in)
+{
+    if (!places_are_valid(in)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    settings_places_t clean;   // built field by field so the saved block has no stray bytes
+    memset(&clean, 0, sizeof(clean));
+    clean.count = in->count;
+    clean.selected = in->count ? in->selected : 0;
+    for (int i = 0; i < in->count; i++) {
+        strlcpy(clean.place[i].name, in->place[i].name, sizeof(clean.place[i].name));
+        strlcpy(clean.place[i].zip, in->place[i].zip, sizeof(clean.place[i].zip));
+        clean.place[i].lat_e2 = in->place[i].lat_e2;
+        clean.place[i].lon_e2 = in->place[i].lon_e2;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_places = clean;
+    xSemaphoreGive(s_lock);
+    save_block("wx_places", &clean, sizeof(clean));
+    return ESP_OK;
+}
+
+bool settings_get_place(settings_place_t *out)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool any = s_places.count > 0;
+    if (any) {
+        *out = s_places.place[s_places.selected];
+    }
+    xSemaphoreGive(s_lock);
+    return any;
+}
+
+void settings_name_place(const settings_place_t *which, const char *name)
+{
+    settings_places_t copy;
+    bool changed = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_places.count; i++) {
+        settings_place_t *p = &s_places.place[i];
+        if (!p->name[0] && p->lat_e2 == which->lat_e2 && p->lon_e2 == which->lon_e2 && strcmp(p->zip, which->zip) == 0) {
+            strlcpy(p->name, name, sizeof(p->name));
+            changed = true;
+        }
+    }
+    copy = s_places;
+    xSemaphoreGive(s_lock);
+    if (changed) {
+        save_block("wx_places", &copy, sizeof(copy));
+    }
+}
+
+void settings_get_weather_look(settings_weather_look_t *out)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *out = s_weather_look;
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t settings_set_weather_look(const settings_weather_look_t *in)
+{
+    if (in->size > 2 || !in->font[0] || strlen(in->font) >= SETTINGS_FONT_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    settings_weather_look_t clean;
+    memset(&clean, 0, sizeof(clean));
+    strlcpy(clean.font, in->font, sizeof(clean.font));
+    clean.size = in->size;
+    clean.hours = in->hours;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_weather_look = clean;
+    xSemaphoreGive(s_lock);
+    save_block("wx_look", &clean, sizeof(clean));
+    return ESP_OK;
+}
 
 void settings_get_weather_schedule(settings_weather_schedule_t *out)
 {
@@ -175,49 +292,6 @@ esp_err_t settings_set_weather_schedule(const settings_weather_schedule_t *in)
     s_weather_schedule = clean;
     xSemaphoreGive(s_lock);
 
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
-        ESP_LOGW(TAG, "could not save the weather schedule");
-        return ESP_OK;   // it still applies until the next restart
-    }
-    nvs_set_blob(h, "wx_sched", &clean, sizeof(clean));
-    nvs_commit(h);
-    nvs_close(h);
-    return ESP_OK;
-}
-
-void settings_get_weather_zip(char out[SETTINGS_ZIP_MAX])
-{
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    strlcpy(out, s_weather_zip, SETTINGS_ZIP_MAX);
-    xSemaphoreGive(s_lock);
-}
-
-esp_err_t settings_set_weather_zip(const char *zip)
-{
-    size_t len = strlen(zip);
-    if (len != 0 && len != SETTINGS_ZIP_MAX - 1) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    for (const char *p = zip; *p; p++) {
-        if (*p < '0' || *p > '9') {
-            return ESP_ERR_INVALID_ARG;
-        }
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool changed = strcmp(s_weather_zip, zip) != 0;
-    strlcpy(s_weather_zip, zip, sizeof(s_weather_zip));
-    xSemaphoreGive(s_lock);
-    if (changed) {
-        nvs_handle_t h;
-        if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
-            ESP_LOGW(TAG, "could not save the weather ZIP code");
-            return ESP_OK;   // it still applies until the next restart
-        }
-        nvs_set_str(h, "wx_zip", zip);
-        nvs_commit(h);
-        nvs_close(h);
-        ESP_LOGI(TAG, "weather ZIP code is now \"%s\"", zip);
-    }
+    save_block("wx_sched", &clean, sizeof(clean));
     return ESP_OK;
 }

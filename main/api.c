@@ -44,6 +44,8 @@
 #include "fw_update.h"
 #include "automations.h"
 #include "zip_table.h"
+#include "city_table.h"
+#include "ticket_draw.h"
 
 static const char *TAG = "api";
 
@@ -254,15 +256,33 @@ static void add_settings(cJSON *root)
  * since the board started); when "ok" is false, "error" and "message" say why and there is no "ticket". */
 static void add_automations(cJSON *root)
 {
-    char zip[SETTINGS_ZIP_MAX], place[WEATHER_PLACE_MAX];
     automations_weather_status_t w;
-    settings_get_weather_zip(zip);
-    weather_get_place(place, sizeof(place));
+    settings_places_t pl;
+    settings_weather_look_t look;
+    settings_get_places(&pl);
+    settings_get_weather_look(&look);
     automations_get_weather_status(&w);
+    const settings_place_t *now = pl.count ? &pl.place[pl.selected] : NULL;
 
     cJSON *weather = cJSON_AddObjectToObject(cJSON_AddObjectToObject(root, "automations"), "weather");
-    cJSON_AddStringToObject(weather, "zip", zip);
-    cJSON_AddStringToObject(weather, "place", place);
+    // The selected place: "zip" is "" if it was added by town name, "place" is "" while a ZIP code's town is not known yet.
+    cJSON_AddStringToObject(weather, "zip", now ? now->zip : "");
+    cJSON_AddStringToObject(weather, "place", now ? now->name : "");
+    // All saved places, and which one is selected (-1 = there are none).
+    cJSON *places = cJSON_AddArrayToObject(weather, "places");
+    for (int i = 0; i < pl.count; i++) {
+        cJSON *place = cJSON_CreateObject();
+        cJSON_AddStringToObject(place, "name", pl.place[i].name);
+        cJSON_AddStringToObject(place, "zip", pl.place[i].zip);
+        cJSON_AddItemToArray(places, place);
+    }
+    cJSON_AddNumberToObject(weather, "selected", now ? pl.selected : -1);
+    cJSON_AddNumberToObject(weather, "max_places", SETTINGS_PLACES_MAX);
+    // How the ticket looks: font ("Printer" = the printer's built-in font), size 0-2, hour-by-hour list or not.
+    cJSON *jlook = cJSON_AddObjectToObject(weather, "look");
+    cJSON_AddStringToObject(jlook, "font", look.font);
+    cJSON_AddNumberToObject(jlook, "size", look.size);
+    cJSON_AddBoolToObject(jlook, "hours", look.hours);
     cJSON_AddBoolToObject(weather, "busy", w.busy);
     // Looking up the ZIP code's town: "locating" = still trying, "locate_error" = why the last try failed ("" = it has not).
     cJSON_AddBoolToObject(weather, "locating", w.locating);
@@ -1077,9 +1097,13 @@ static esp_err_t update_post(httpd_req_t *req)
 }
 
 /* ---------- POST /api/automations/weather ----------
- * {"zip": "48104"} sets the ZIP code weather tickets are for. {"zip": ""} clears it.
- * The ZIP code is looked up in the table inside the firmware (no internet needed); its place
- * name is then fetched in the background and appears in /api/status a few seconds later.
+ * Changes the weather settings. Send only what should change:
+ *   places     {"zip": "48104"} or {"city": "Austin, TX"}  add a place and select it
+ *              {"select": 1}   select a place from the list     {"remove": 1}   take one off the list
+ *   schedule   {"on": true}    {"slots": [{"time": "07:30", "on": true}, ...three of them]}
+ *   look       {"font": "Inter", "size": 1, "hours": true}
+ * A ZIP code or town is looked up in the tables inside the firmware (no internet needed); a ZIP
+ * code's town name is then fetched in the background and appears in /api/status a few seconds later.
  * Reply: {"ok":true,"automations":{...as in /api/status}}, or {"ok":false,"error":"bad_zip","message":"..."}. */
 static esp_err_t weather_post(httpd_req_t *req)
 {
@@ -1091,11 +1115,92 @@ static esp_err_t weather_post(httpd_req_t *req)
         return ESP_OK;
     }
     // Every part is optional: only what is sent is changed.
-    const cJSON *jzip = cJSON_GetObjectItem(body, "zip");
-    const cJSON *jon = cJSON_GetObjectItem(body, "on"), *jslots = cJSON_GetObjectItem(body, "slots");
-    int lat_e2, lon_e2;
-    bool zip_ok = !jzip || (cJSON_IsString(jzip) && (!jzip->valuestring[0] || zip_table_lookup(jzip->valuestring, &lat_e2, &lon_e2)));
+    const char *problem = NULL, *problem_text = NULL;
 
+    // Places: {"zip": "48104"} or {"city": "Austin, TX"} adds a place and selects it (or just selects it if it
+    // is already there), {"select": 1} selects one from the list, {"remove": 1} takes one off the list.
+    const cJSON *jzip = cJSON_GetObjectItem(body, "zip"), *jcity = cJSON_GetObjectItem(body, "city");
+    const cJSON *jselect = cJSON_GetObjectItem(body, "select"), *jremove = cJSON_GetObjectItem(body, "remove");
+    settings_places_t pl;
+    settings_get_places(&pl);
+    bool places_changed = false;
+    if (jzip || jcity) {
+        settings_place_t add;
+        city_t city;
+        int lat_e2 = 0, lon_e2 = 0;
+        memset(&add, 0, sizeof(add));
+        if (jzip && cJSON_IsString(jzip) && zip_table_lookup(jzip->valuestring, &lat_e2, &lon_e2)) {
+            strlcpy(add.zip, jzip->valuestring, sizeof(add.zip));
+            add.lat_e2 = (int16_t)lat_e2;
+            add.lon_e2 = (int16_t)lon_e2;
+        } else if (!jzip && cJSON_IsString(jcity) && city_table_find(jcity->valuestring, &city)) {
+            strlcpy(add.name, city.name, sizeof(add.name));
+            add.lat_e2 = (int16_t)city.lat_e2;
+            add.lon_e2 = (int16_t)city.lon_e2;
+        } else {
+            problem = jzip ? "bad_zip" : "bad_city";
+            problem_text = jzip ? "That is not a US ZIP code the printer knows" : "That is not a US town the printer knows";
+        }
+        int at = -1;
+        for (int i = 0; !problem && i < pl.count; i++) {
+            bool same = add.zip[0] ? strcmp(pl.place[i].zip, add.zip) == 0
+                                   : !pl.place[i].zip[0] && strcmp(pl.place[i].name, add.name) == 0;
+            at = same ? i : at;
+        }
+        if (!problem && at < 0 && pl.count == SETTINGS_PLACES_MAX) {
+            problem = "places_full";
+            problem_text = "The list of places is full. Remove one to add another";
+        } else if (!problem) {
+            if (at < 0) {
+                at = pl.count++;
+                pl.place[at] = add;
+            }
+            pl.selected = (uint8_t)at;
+            places_changed = true;
+        }
+    }
+    if (!problem && (jselect || jremove)) {
+        const cJSON *which = jselect ? jselect : jremove;
+        if (!cJSON_IsNumber(which) || which->valueint < 0 || which->valueint >= pl.count) {
+            problem = "bad_place";
+            problem_text = "That place is not on the list";
+        } else if (jselect) {
+            pl.selected = (uint8_t)which->valueint;
+            places_changed = true;
+        } else {
+            int gone = which->valueint;
+            for (int i = gone; i + 1 < pl.count; i++) {
+                pl.place[i] = pl.place[i + 1];
+            }
+            pl.count--;
+            pl.selected = pl.selected > gone ? pl.selected - 1 : pl.selected;   // keep pointing at the same place
+            pl.selected = pl.selected >= pl.count ? 0 : pl.selected;            // the selected one was removed: the first is next
+            places_changed = true;
+        }
+    }
+
+    // The look: {"font": "Inter", "size": 1, "hours": true}
+    const cJSON *jfont = cJSON_GetObjectItem(body, "font"), *jsize = cJSON_GetObjectItem(body, "size");
+    const cJSON *jhours = cJSON_GetObjectItem(body, "hours");
+    settings_weather_look_t look;
+    settings_get_weather_look(&look);
+    if (!problem && (jfont || jsize || jhours)) {
+        bool font_ok = !jfont || (cJSON_IsString(jfont) && (ticket_font_id(jfont->valuestring) >= 0 ||
+                                                              strcmp(jfont->valuestring, "Printer") == 0));
+        bool size_ok = !jsize || (cJSON_IsNumber(jsize) && jsize->valueint >= 0 && jsize->valueint <= 2);
+        if (!font_ok || !size_ok || (jhours && !cJSON_IsBool(jhours))) {
+            problem = "bad_look";
+            problem_text = "That is not a font or size the printer has";
+        } else {
+            if (jfont) {
+                strlcpy(look.font, jfont->valuestring, sizeof(look.font));
+            }
+            look.size = jsize ? (uint8_t)jsize->valueint : look.size;
+            look.hours = jhours ? cJSON_IsTrue(jhours) : look.hours;
+        }
+    }
+
+    const cJSON *jon = cJSON_GetObjectItem(body, "on"), *jslots = cJSON_GetObjectItem(body, "slots");
     // The schedule: {"on": true, "slots": [{"time": "07:30", "on": true}, ... one per slot]}
     settings_weather_schedule_t was, sched;
     settings_get_weather_schedule(&was);
@@ -1121,27 +1226,55 @@ static esp_err_t weather_post(httpd_req_t *req)
             sched.slot[i].on = cJSON_IsTrue(on);
         }
     }
-    bool ok = zip_ok && sched_ok && (!jzip || settings_set_weather_zip(jzip->valuestring) == ESP_OK) &&
-              settings_set_weather_schedule(&sched) == ESP_OK;
-    bool zip_sent = jzip != NULL;
     cJSON_Delete(body);
-    if (!zip_ok) {
-        return refuse(req, "400 Bad Request", "bad_zip", "That is not a US ZIP code the printer knows");
+    if (!problem && !sched_ok) {
+        problem = "bad_schedule";
+        problem_text = "That is not a schedule the printer understands";
     }
-    if (!ok) {
-        return refuse(req, "400 Bad Request", "bad_schedule", "That is not a schedule the printer understands");
+    if (problem) {   // nothing is changed unless everything sent was right
+        return refuse(req, "400 Bad Request", problem, problem_text);
+    }
+    settings_set_weather_schedule(&sched);
+    settings_set_weather_look(&look);
+    if (places_changed) {
+        settings_set_places(&pl);
     }
     for (int i = 0; i < SETTINGS_WEATHER_SLOTS; i++) {
         if (sched.slot[i].minute != was.slot[i].minute) {
             automations_weather_slot_changed(i);   // a slot moved to a new time may print again today
         }
     }
-    if (zip_sent) {
-        automations_weather_zip_changed();
+    if (places_changed) {
+        automations_weather_zip_changed();   // look up the selected place's forecast address (and town) in the background
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
     add_automations(root);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/automations/places/search ----------
+ * Towns to suggest while a place is being typed: {"q": "aust"} ->
+ *   {"ok":true,"matches":[{"name":"Austin, TX"},{"name":"Austin, MN"},...]}   (the biggest first, at most 6)
+ * Looked up in a table on the board, with no internet. Add one with POST /api/automations/weather {"city": name}. */
+static esp_err_t places_search_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *q = cJSON_GetObjectItem(body, "q");
+    city_t found[6];
+    int n = cJSON_IsString(q) ? city_table_search(q->valuestring, found, 6) : 0;
+    cJSON_Delete(body);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON *matches = cJSON_AddArrayToObject(root, "matches");
+    for (int i = 0; i < n; i++) {
+        cJSON *match = cJSON_CreateObject();
+        cJSON_AddStringToObject(match, "name", found[i].name);
+        cJSON_AddItemToArray(matches, match);
+    }
     return send_json(req, root);
 }
 
@@ -1203,9 +1336,8 @@ static esp_err_t weather_print_now_post(httpd_req_t *req)
             return refuse(req, "400 Bad Request", "bad_kind", "Use \"today\", \"rest\" or \"tomorrow\"");
         }
     }
-    char zip[SETTINGS_ZIP_MAX];
-    settings_get_weather_zip(zip);
-    if (!zip[0]) {
+    settings_place_t place;
+    if (!settings_get_place(&place)) {
         return refuse(req, "409 Conflict", "no_zip", weather_result_message(WEATHER_NO_ZIP));
     }
     if (automations_weather_print_now(kind) != ESP_OK) {
@@ -1237,6 +1369,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/update",       .method = HTTP_POST, .handler = update_post },
         { .uri = "/api/automations/weather", .method = HTTP_POST, .handler = weather_post },
         { .uri = "/api/automations/weather/print-now", .method = HTTP_POST, .handler = weather_print_now_post },
+        { .uri = "/api/automations/places/search", .method = HTTP_POST, .handler = places_search_post },
         { .uri = "/api/automations/weather/run-slot", .method = HTTP_POST, .handler = weather_run_slot_post },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
