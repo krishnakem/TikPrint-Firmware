@@ -105,6 +105,7 @@ static void remember(const printer_job_t *job)
         .source = s_source ? s_source : "",
         .image = s_image,
         .image_rows = rows,
+        .text_in_image = s_image && job->text_in_image,
     };
     s_have_last = true;
 }
