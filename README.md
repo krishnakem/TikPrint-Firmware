@@ -65,6 +65,9 @@ web: GET /
 
 ```sh
 curl http://tikprint.local/api/status               # includes "print_queue": {"waiting": 2, "printing": true}
+                                                    # and "time": {"set": true, "source": "browser", ...} (see Clock)
+curl -d "{\"unix_ms\":$(date +%s)000,\"timezone\":\"America/Detroit\",\"posix_tz\":\"EST5EDT,M3.2.0,M11.1.0\"}" \
+     http://tikprint.local/api/time                 # set the board's clock by hand (the page does this by itself)
 curl http://tikprint.local/api/wifi/scan
 curl -d '{"ssid":"NAME","password":"PASSWORD"}' http://tikprint.local/api/wifi/connect
 curl -X POST http://tikprint.local/api/wifi/forget
@@ -85,6 +88,34 @@ curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another
 - `position` is the ticket's place in line: 0 = printing now, 2 = two tickets ahead of it.
 - `queued` is true when it has to wait (`position` above 0).
 - If the queue is full: `{"ok":false,"error":"queue_full","message":"The print queue is full, try again in a moment"}`.
+
+## Clock
+
+The board has no battery clock, so it forgets the time at every power-off (`main/clock.c`).
+Two things set it again:
+
+| Source | When | Needs |
+| --- | --- | --- |
+| Browser | The page opens, then every 5 minutes while it stays open | Nothing: works over USB with no Wi-Fi |
+| Internet (SNTP, `pool.ntp.org`) | Wi-Fi gets an address, then every hour | Wi-Fi with internet |
+
+- Internet time is trusted more. For 12 hours after an internet sync, browser time is ignored
+  (and the log says so if the two differ by more than 5 seconds).
+- The timezone comes from the browser and is saved on the board (NVS), so it survives a reboot.
+  The time itself is never saved: after a reboot the clock is "not set" until a source sets it.
+- The browser names the zone the IANA way (`America/Detroit`); the board needs a POSIX rule
+  (`EST5EDT,M3.2.0,M11.1.0`). The page converts with a small table of common zones (`TZ_RULES`
+  in `web/index.html`). A zone that is not in the table gets today's offset with no summer-time
+  switch, which corrects itself the next time the page is open after the switch.
+- `/api/status` reports the clock:
+  `"time": {"set": true, "source": "browser", "now": "2026-11-20T22:05:31-05:00", "timezone": "America/Detroit", "last_sync_s_ago": 12}`.
+  `source` is `browser`, `internet` or `none`. While not set, `now` and `last_sync_s_ago` are `null`.
+- In the UI the board's time is in Settings (the gear), e.g. `22:05 · Detroit`.
+- If the clock is set, the ticket's head line carries the print time (`#0042   NOV 20, 10:05 PM`).
+  To switch that off: `HEAD_SHOW_TIME` in `web/index.html` (tickets drawn by the page) and
+  `TICKET_SHOW_TIME` in `main/printer_thermal.c` (tickets in the printer's built-in font).
+- The timings are named constants at the top of `main/clock.c` and of the "Clock" code in `web/index.html`.
+- There is no scheduler yet: the clock is the groundwork for scheduled prints.
 
 ## Printing
 
@@ -162,6 +193,7 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 | `main/wifi_mgr.c` | Wi-Fi: scan, join, forget, reconnect; credentials saved on the board (NVS) |
 | `main/api.c` | The JSON API the UI calls (`/api/...`) |
 | `main/counter.c` | Ticket counter saved on the board (NVS) |
+| `main/clock.c` | The clock: time from the browser or the internet, timezone saved on the board (NVS) |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
 | `main/print_queue.c` | The print queue: tickets wait in line and print one at a time |
 | `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire |

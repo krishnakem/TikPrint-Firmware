@@ -22,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 
 #include "printer.h"
+#include "clock.h"
 
 static const char *TAG = "thermal_printer";
 
@@ -31,6 +32,8 @@ static const char *TAG = "thermal_printer";
 #define PRINTER_BAUD       115200  // must match the printer (its self-test page shows it)
 #define PRINTER_HAS_CUTTER 1       // 1 = cut the paper after each ticket
 #define FEED_LINES_AFTER   4       // blank lines after the ticket, so it clears the tear bar
+#define TICKET_SHOW_TIME   1       // 1 = add the print time to the "#0042" line (built-in font tickets, clock set)
+#define TICKET_TIME_FORMAT "%b %d %H:%M"   // e.g. "Nov 20 22:05" (a strftime pattern)
 
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
 #define BAND_ROWS 64
@@ -140,6 +143,13 @@ static void send_job(const printer_job_t *job)
             send_text("  ");
             send_text(job->source);
         }
+#if TICKET_SHOW_TIME
+        char when[24];
+        if (clock_format_now(when, sizeof(when), TICKET_TIME_FORMAT)) {   // left out if the clock isn't set
+            send_text("  ");
+            send_text(when);
+        }
+#endif
         send_text("\n");
 
         if (job->title[0]) {
