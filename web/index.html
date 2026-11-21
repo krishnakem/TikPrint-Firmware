@@ -71,6 +71,10 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 #doc{width:576px;min-height:150px;transform-origin:0 0;outline:none;font:400 28px/1.35 "Inter",Helvetica,Arial,sans-serif;white-space:pre-wrap;overflow-wrap:break-word}
 /* faded hint on an empty Title / body line. It sits inside the line, so it follows that line's font and size. */
 #doc>.blank::before{content:attr(data-ph);color:#bbb;position:absolute;pointer-events:none}
+/* A line set entirely in the "Printer default" font is printed by the printer in its own built-in font
+   (see "Printer font" in the script). Its letters only come 12 dots wide and 24 tall, or a whole number
+   of times that (--m), so the line is shown in a look-alike font at exactly that size, whatever size was picked. */
+#doc>.pf,#doc>.pf *{font-family:"Printer",monospace!important;font-size:calc(20px*var(--m,1))!important;line-height:var(--lh,30px)!important;font-style:normal!important;letter-spacing:0!important}
 /* A picture inside the text: a line of its own that you can type above and below. It is shown as the
    exact dots that will print. Its ✕ is drawn by CSS so that it is not part of the ticket's text. */
 #doc>.pic{position:relative;margin:6px 0;line-height:0;cursor:default;user-select:none;-webkit-user-select:none}
@@ -394,12 +398,20 @@ const pad=n=>'#'+String(n).padStart(4,'0');
    Its font: click the header to select it, then pick a font in the toolbar (see "Header font" further down).
    Date and time are the BOARD's clock in the board's timezone (its last report plus the seconds since),
    not this device's, and are left out while the board's clock isn't set.
-   With no location typed in, the city of the timezone is used ("America/Los_Angeles" -> Los Angeles). */
-let hdr={location:'',show_location:true,show_date:true,show_time:true,header_font:'Inter'}, tzCity='';
+   With no location typed in, it is the town of the weather ZIP code ("Ann Arbor, MI"), or,
+   while there is none, the city of the timezone ("America/Los_Angeles" -> Los Angeles). */
+let hdr={location:'',show_location:true,show_date:true,show_time:true,header_font:'Inter'}, tzCity='', zipCity='';
+const autoPlace=()=>zipCity||tzCity;
+/* From /api/status: the town the board found for the weather ZIP code. */
+function showZipPlace(a){
+  const city=((a&&a.weather&&a.weather.place)||'').trim();
+  if(city===zipCity)return;
+  zipCity=city; $('setLoc').placeholder=autoPlace(); showHeader();
+}
 let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "PST"}
 function headerParts(){
   const now=boardTime?new Date(boardTime.wall+performance.now()-boardTime.at):null, fmt=o=>now.toLocaleString('en-US',{timeZone:'UTC',...o}).toUpperCase();
-  const place=hdr.location||tzCity;   // shown as typed
+  const place=hdr.location||autoPlace();   // shown as typed
   const date=now&&hdr.show_date?fmt({month:'short',day:'numeric',year:'numeric'}):'';
   const time=now&&hdr.show_time?fmt({hour:'numeric',minute:'2-digit'})+(boardTime.zone?' '+boardTime.zone:''):'';
   return {left:'TikPrint'+(hdr.show_location&&place?' | '+place:''), right:[date,time].filter(Boolean).join(' | ')};
@@ -489,7 +501,7 @@ function showClock(t){
   // "2026-11-20T22:05:31-05:00" -> the 22:05:31 part as a number, so the page can keep counting from it
   const m=t.set&&/^(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)/.exec(t.now);
   boardTime=m?{wall:Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5],+m[6]),at:performance.now(),zone:t.zone||''}:null;
-  tzCity=/\//.test(t.timezone)?t.timezone.split('/').pop().replace(/_/g,' '):''; $('setLoc').placeholder=tzCity; showHeader();
+  tzCity=/\//.test(t.timezone)?t.timezone.split('/').pop().replace(/_/g,' '):''; $('setLoc').placeholder=autoPlace(); showHeader();
   $('setClock').textContent=t.set?t.now.slice(11,16)+' · '+t.timezone.split('/').pop().replace(/_/g,' '):'Not set';
   $('setClock').title=t.set?`From the ${t.source==='internet'?'internet':'browser'}`:'Open this page or connect Wi-Fi to turn on schedules';
 }
@@ -582,6 +594,7 @@ function applyStatus(s){
   $('okHost').textContent=s.hostname;
   // The board forgets the time when it loses power: give it back as soon as it says so (also the very first time).
   if(s.settings)applySettings(s.settings);
+  showZipPlace(s.automations);
   if(s.printer)showPrinter(s.printer,s.print_queue);
   if(s.time){showClock(s.time); if(!s.time.set&&Date.now()-timeSentAt>TIME_RETRY_MS)sendTime()}
   if(s.wifi&&!joining){$('okName').textContent=s.wifi.ssid;$('okIp').textContent=s.wifi.ip}
@@ -1139,6 +1152,7 @@ $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 
 /* ---------- Editor ---------- */
 /* The printer's built-in font can't be changed, so the page draws the text itself, as dots.
+   (Except lines in the "Printer default" font: those the printer prints itself. See "Printer font".)
    The ticket is a small word processor: select text, then pick a font, size or style.
    The font files live on the board (web/fonts), so this works with no internet.
    To add a font: see the note in main/CMakeLists.txt. */
@@ -1149,6 +1163,8 @@ const FONTS=[
   {name:'Nunito',         file:'nunito',         weight:'200 1000'},
   {name:'Caveat',         file:'caveat',         weight:'400 700'},
   {name:'JetBrains Mono', file:'jetbrains-mono', weight:'100 800'},
+  // The printer's own built-in font (see "Printer font" below). The file is only its look-alike on screen.
+  {name:'Printer',        file:'jetbrains-mono', weight:'100 800', label:'Printer default'},
 ];
 const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, true to size on paper
 const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
@@ -1182,6 +1198,45 @@ document.addEventListener('selectionchange',()=>{
   const sel=getSelection();
   if(sel.rangeCount&&doc.contains(sel.anchorNode)){savedSel=sel.getRangeAt(0).cloneRange();showState()}
 });
+/* ---- Printer font ---- */
+/* "Printer default" in the font menu is the font built into the printer. A line set entirely in it is
+   not drawn as dots: its words are sent to the printer, which prints them itself (sharp, and fast).
+   - The printer's letters are 12 dots wide and 24 tall, 48 to a line. Bigger sizes are whole multiples
+     of that (2x = 24 to a line, 3x = 16, ...), so the size picked is rounded to the nearest one.
+   - It has bold and underline, but no italics.
+   - On screen a look-alike font stands in for it, at exactly the printer's size, so lines break where
+     they will on paper. The letters themselves look a little different on paper.
+   - Printer-font words that share a line with another font are drawn as dots, in the look-alike. */
+const PF='Printer', PF_COLS=48, PF_W=PW/PF_COLS, PF_H=24;   // letters on a line, and one letter's width and height in dots
+const PF_LINE=30;                                           // dots from one line of normal-size text to the next
+const pfLine=m=>m>1?PF_H*m:PF_LINE;                         // the same for text m times the normal size
+/* Mark a line (class "pf") if all of it is in the printer's font, and note its size multiple (--m). */
+function markPrinterLine(b){
+  b.classList.remove('pf');   // so the styles read below are the ones picked, not the printer's
+  const w=document.createTreeWalker(b,NodeFilter.SHOW_TEXT), els=[];
+  for(let n;(n=w.nextNode());)if(n.data)els.push(n.parentElement);
+  if(!els.length){let el=b; while(el.firstElementChild)el=el.firstElementChild; els.push(el)}   // an empty line: the font that typing there would get
+  const cs=els.map(el=>getComputedStyle(el));
+  if(!cs.every(c=>c.fontFamily.includes(PF)))return;
+  const m=Math.min(8,Math.max(1,Math.round(parseFloat(cs[0].fontSize)/PF_H)));
+  b.style.setProperty('--m',m); b.style.setProperty('--lh',pfLine(m)+'px'); b.classList.add('pf');
+}
+/* Letters with their styles (1 = bold, 2 = underlined) -> runs of text in one style each, as the board wants them. */
+function runsOf(cells){
+  const runs=[];
+  for(const c of cells){
+    const l=runs[runs.length-1];
+    if(l&&l.st===c.st&&l.text.length<60)l.text+=c.ch; else runs.push({st:c.st,text:c.ch});
+  }
+  return runs.map(r=>({text:r.text,...(r.st&1&&{bold:true}),...(r.st&2&&{underline:true})}));
+}
+/* The ticket header as one line of the printer's font: left part at the left edge, date and time at the right. */
+function headerLine(){
+  let {left,right}=headerParts(); const room=PF_COLS-(right?right.length+2:0);
+  if(left.length>room)left=left.slice(0,room-3)+'...';
+  return (left+' '.repeat(Math.max(1,PF_COLS-left.length-right.length))+right).trimEnd();
+}
+
 /* Clean up after the browser's editing commands. */
 function tidy(){
   // The browser can only set 7 fixed sizes, as <font size>. Turn those into the real size picked.
@@ -1200,6 +1255,8 @@ function tidy(){
     if(ph&&seen.has(ph))delete b.dataset.ph; else if(ph)seen.add(ph);
     b.classList.toggle('blank',!!b.dataset.ph&&!b.textContent&&(b.dataset.ph===TITLE_HINT||few));
   }
+  // Lines that are all in the printer's own font are shown at the size the printer will print them.
+  for(const b of doc.children)if(!isPic(b))markPrinterLine(b);
 }
 doc.addEventListener('input',tidy);
 /* Enter in the Title line goes to the body, instead of making a second big bold line. */
@@ -1287,7 +1344,7 @@ function showState(){
   }
   $('tools').querySelectorAll('button').forEach(b=>{let on=false; try{on=document.queryCommandState(b.dataset.cmd)}catch(e){} b.classList.toggle('on',on)});
 }
-$('fFont').innerHTML=FONTS.map(f=>`<option>${f.name}</option>`).join('');
+$('fFont').innerHTML=FONTS.map(f=>`<option value="${f.name}">${f.label||f.name}</option>`).join('');
 $('fSize').innerHTML=SIZES.map(p=>`<option>${p}</option>`).join(''); $('fSize').value=10;
 $('fFont').onchange=e=>headerSelected?saveSettings({header_font:e.target.value}):format('fontName',e.target.value);
 $('fSize').onchange=e=>{
@@ -1300,6 +1357,7 @@ $('tools').addEventListener('mousedown',e=>{if(e.target.closest('button'))e.prev
 $('tools').addEventListener('click',e=>{const b=e.target.closest('button'); if(b)format(b.dataset.cmd)});
 
 /* Turn the ticket's text into dots, PW wide. Returns {height, data} like rasterize(), or null if too long.
+   With lines in the printer's font it also returns "parts" (see the end of docBits and "Printer font").
    The browser has already laid the text out at paper size, so we ask it where every word sits
    and draw each word at that spot. What you see is what prints. */
 /* Draw the header line (see "Ticket header") across the top of the printed ticket: left part at the left edge,
@@ -1314,13 +1372,15 @@ function drawHeader(g){
 }
 function docBits(source){
   const box=doc.getBoundingClientRect(), k=box.width/PW, head=HDR_H+(source?Math.round(HEAD_SIZE*1.4)+14:HDR_PAD);   // room above the text: header, plus the source line if there is one
-  const measure=mkCanvas(1,1).getContext('2d'), range=document.createRange(), items=[];
+  const measure=mkCanvas(1,1).getContext('2d'), range=document.createRange(), items=[], words=[];
   const walker=document.createTreeWalker(doc,NodeFilter.SHOW_TEXT);
   for(let n;(n=walker.nextNode());){
     const el=n.parentElement, cs=getComputedStyle(el), size=parseFloat(cs.fontSize);
     const font=`${cs.fontStyle} ${cs.fontWeight} ${size}px ${cs.fontFamily}`;
     measure.font=font; const m=measure.measureText('x'), asc=m.fontBoundingBoxAscent, desc=m.fontBoundingBoxDescent;
     let under=false; for(let a=el;a&&doc.contains(a);a=a.parentElement)if(getComputedStyle(a).textDecorationLine.includes('underline'))under=true;
+    // a line in the printer's font is not drawn: its words are only noted, with where they sit (see below)
+    const blk=lineAt(n), pf=blk&&blk.classList.contains('pf')?blk:null, st=(parseInt(cs.fontWeight)>=600?1:0)|(under?2:0);
     const piece=(from,to)=>{
       range.setStart(n,from); range.setEnd(n,to);
       const rects=[...range.getClientRects()].filter(r=>r.width>0), text=n.data.slice(from,to), blank=!text.trim();
@@ -1328,9 +1388,11 @@ function docBits(source){
         for(let i=from;i<to;){const len=n.data.codePointAt(i)>0xFFFF?2:1; piece(i,i+len); i+=len}
         return;
       }
-      for(const r of blank?rects:rects.slice(0,1))
+      for(const r of blank?rects:rects.slice(0,1)){
+        if(pf){if(!blank)words.push({blk:pf,text,st,x:(r.left-box.left)/k,y:(r.top-box.top)/k}); continue}
         items.push({text:blank?'':text,font,size,under,x:(r.left-box.left)/k,w:r.width/k,
                     y:(r.top-box.top)/k,base:(r.top-box.top)/k+(r.height/k-asc-desc)/2+asc,bottom:(r.bottom-box.top)/k});
+      }
     };
     for(const w of n.data.matchAll(/\s+|\S+/g))piece(w.index,w.index+w[0].length);
   }
@@ -1339,12 +1401,29 @@ function docBits(source){
     const r=el.querySelector('canvas').getBoundingClientRect();
     return {bits:pics.get(el.dataset.pic),y:(r.top-box.top)/k,bottom:(r.bottom-box.top)/k};
   }).filter(p=>p.bits);
+  // Lines in the printer's font: what each one says. Every word goes in the column it sits in on screen,
+  // so the printer's line reads the same, centred or right-aligned text included.
+  const natives=[];
+  for(const b of doc.children){
+    if(!b.classList.contains('pf'))continue;
+    const m=+b.style.getPropertyValue('--m')||1, lh=pfLine(m), cw=PF_W*m, r=b.getBoundingClientRect(), y=(r.top-box.top)/k;
+    const lines=Array.from({length:Math.max(1,Math.round(r.height/k/lh))},()=>[]);
+    for(const w of words)if(w.blk===b){
+      const line=lines[Math.min(lines.length-1,Math.max(0,Math.round((w.y-y)/lh)))];
+      const gap=line.length?line[line.length-1].st&w.st:0;   // the space before a word is bold / underlined only if both its neighbours are
+      for(const col=Math.round(w.x/cw);line.length<col;)line.push({ch:' ',st:gap});
+      for(const ch of w.text)line.push({ch,st:w.st});
+    }
+    lines.forEach((cells,i)=>natives.push({y:y+i*lh,bottom:y+(i+1)*lh,rows:lh,text:cells.length>0,part:{size:m,runs:runsOf(cells)}}));
+  }
   // start at the first line that has text or a picture (an empty Title line prints no blank gap), end at the last
-  const drawn=items.filter(it=>it.text).concat(picItems), up=drawn.length?Math.min(...drawn.map(it=>it.y)):0, top=head-up;
-  const h=Math.ceil(top+drawn.reduce((b,it)=>Math.max(b,it.bottom),up)+8); if(h>TEXT_MAXH)return null;
+  const drawn=items.filter(it=>it.text).concat(picItems,natives.filter(n=>n.text)), up=drawn.length?Math.min(...drawn.map(it=>it.y)):0, top=head-up;
+  const low=drawn.reduce((b,it)=>Math.max(b,it.bottom),up), h=Math.ceil(top+low+8); if(h>TEXT_MAXH)return null;
+  const hdrNative=hdr.header_font===PF;   // the header is in the printer's font too: it is sent as a line of text, not drawn
   const c=mkCanvas(PW,h), g=c.getContext('2d',{willReadFrequently:true});
   g.fillStyle='#fff'; g.fillRect(0,0,PW,h); g.fillStyle='#000';
-  g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`; drawHeader(g); g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`;
+  if(!hdrNative)drawHeader(g);
+  g.font=`700 ${HEAD_SIZE}px "Inter",Helvetica,Arial,sans-serif`;
   if(source)g.fillText(source,0,HDR_H+4+HEAD_SIZE);   // the ticket number is not printed
   for(const it of items){
     g.font=it.font; if(it.text)g.fillText(it.text,it.x,top+it.base);
@@ -1357,7 +1436,24 @@ function docBits(source){
     const y0=Math.round(top+p.y), rows=Math.min(p.bits.height,h-y0);
     if(rows>0)data.set(p.bits.data.subarray(0,rows*PW/8),y0*PW/8);
   }
-  return {height:h,data};
+  // Printer-font lines are not in the image. Cut the rows where each one sits out of it, and list the
+  // ticket top to bottom as "parts": image rows and lines of printer text in turn (see build_layout in api.c).
+  const cuts=hdrNative?[{a:0,b:HDR_H,part:{size:1,runs:[{text:headerLine()}]}}]:[];
+  for(const n of natives)if(n.y>up-.5&&n.y<low-.5){   // empty lines above the first and below the last thing printed are left out
+    const a=Math.round(top+n.y); cuts.push({a,b:Math.min(h,a+n.rows),part:n.part});
+  }
+  if(!cuts.length)return {height:h,data};
+  const BW=PW/8, parts=[], keep=[]; let y=0, rows=0;
+  const image=(from,to)=>{
+    if(to-from<2)return;   // a sliver left between two lines by rounding
+    keep.push(data.subarray(from*BW,to*BW)); rows+=to-from;
+    const l=parts[parts.length-1]; if(l&&l.rows)l.rows+=to-from; else parts.push({rows:to-from});
+  };
+  for(const cut of cuts){image(y,cut.a); parts.push(cut.part); y=Math.max(y,cut.b)}
+  image(y,h);
+  const out=new Uint8Array(rows*BW); let at=0;
+  for(const part of keep){out.set(part,at); at+=part.length}
+  return {height:rows,data:out,parts};
 }
 const docText=()=>doc.innerText.trim();
 
@@ -1366,6 +1462,7 @@ const docText=()=>doc.innerText.trim();
    The image is the text (drawn above) followed by the file's dots. The plain words are sent too,
    for the board's log. If the fonts didn't load, the text is left out of the image and the board
    prints those plain words in the printer's built-in font instead.
+   Lines set in the "Printer default" font are not in the image either: they go in the JSON as "parts".
    Returns null if there is too much text. */
 function printBody(){
   const meta={title:'',body:docText().slice(0,3000),source:$('pSrc').classList.contains('on')?$('srcName').textContent:''};
@@ -1375,6 +1472,7 @@ function printBody(){
   const rows=(text?text.height:0)+(file?file.height:0);
   if(rows)meta.image={width:PW,height:rows};
   if(text)meta.text_in_image=true;
+  if(text&&text.parts)meta.parts=text.parts;   // lines in the printer's font. The file's rows are not listed: unlisted rows print last
   const json=new TextEncoder().encode(JSON.stringify(meta));
   const buf=new Uint8Array(4+json.length+rows*PW/8);
   new DataView(buf.buffer).setUint32(0,json.length,true);

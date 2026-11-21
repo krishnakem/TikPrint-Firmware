@@ -60,13 +60,14 @@ static const char *copy_text(char **at, const char *text)
     return copy;
 }
 
-/* Make the queue's own copy of a job: one PSRAM block with the text and the image in it. */
+/* Make the queue's own copy of a job: one PSRAM block with the text, the layout and the image in it. */
 static queued_job_t *copy_job(const printer_job_t *job)
 {
     bool has_image = job->image && job->image_rows;
     size_t image_bytes = has_image ? (size_t)job->image_rows * PRINTER_WIDTH_BYTES : 0;
     size_t text_bytes = strlen(job->title) + strlen(job->body) + strlen(job->source) + 3;
-    queued_job_t *q = heap_caps_malloc(sizeof(*q) + text_bytes + image_bytes, MALLOC_CAP_SPIRAM);
+    size_t layout_bytes = job->layout ? job->layout_len : 0;
+    queued_job_t *q = heap_caps_malloc(sizeof(*q) + text_bytes + layout_bytes + image_bytes, MALLOC_CAP_SPIRAM);
     if (!q) {
         return NULL;
     }
@@ -75,6 +76,9 @@ static queued_job_t *copy_job(const printer_job_t *job)
     q->job.title = copy_text(&at, job->title);
     q->job.body = copy_text(&at, job->body);
     q->job.source = copy_text(&at, job->source);
+    q->job.layout = layout_bytes ? memcpy(at, job->layout, layout_bytes) : NULL;
+    q->job.layout_len = layout_bytes;
+    at += layout_bytes;
     q->job.image = has_image ? memcpy(at, job->image, image_bytes) : NULL;
     q->job.image_rows = has_image ? job->image_rows : 0;
     q->image_bytes = image_bytes;

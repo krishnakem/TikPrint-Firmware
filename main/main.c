@@ -17,6 +17,8 @@
 #include "fw_update.h"
 #include "printer.h"
 #include "web_server.h"
+#include "weather.h"
+#include "automations.h"
 
 static const char *TAG = "tikprint";
 
@@ -41,6 +43,8 @@ void app_main(void)
     ESP_ERROR_CHECK(settings_init());
     ESP_ERROR_CHECK(clock_init());   // before Wi-Fi, so it hears "Wi-Fi got an address" and fetches internet time
     ESP_ERROR_CHECK(printer_init());
+    ESP_ERROR_CHECK(weather_init());
+    ESP_ERROR_CHECK(automations_start());   // after the printer: its tickets go into the print queue
     ESP_ERROR_CHECK(usb_net_start());
     ESP_ERROR_CHECK(usb_dhcp_start(usb_net_get_netif()));
     net_name_start(usb_net_get_netif());  // not fatal: the IP address still works without it

@@ -36,6 +36,7 @@
 #include "printer.h"
 #include "clock.h"
 #include "settings.h"
+#include "weather.h"
 
 static const char *TAG = "thermal_printer";
 
@@ -48,6 +49,7 @@ static const char *TAG = "thermal_printer";
 #define FEED_LINES_AFTER   4       // blank lines after the ticket, so it clears the tear bar
 #define HEADER_DATE_FORMAT "%b %d, %Y"     // header line of built-in font tickets, e.g. "Nov 20, 2026" (strftime patterns)
 #define HEADER_TIME_FORMAT "%I:%M %p %Z"   //                                        e.g. "10:05 PM EST"
+#define HEADER_COLS        64      // characters per line in the printer's small font (9 dots each), used for that header
 
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
 #define BAND_ROWS 64
@@ -95,12 +97,12 @@ static void cmd(const char *bytes, size_t len)
  * tickets arrive as UTF-8. Swap the characters we know for the closest thing
  * the printer has, and print '?' for the rest.
  */
-static void send_text(const char *s)
+static void send_text_n(const char *s, size_t len)
 {
     char out[96];
     size_t n = 0;
-    const unsigned char *p = (const unsigned char *)s;
-    while (*p) {
+    const unsigned char *p = (const unsigned char *)s, *end = p + len;
+    while (p < end) {
         uint32_t cp;
         int extra;
         if (*p < 0x80)                { cp = *p;        extra = 0; }
@@ -109,7 +111,7 @@ static void send_text(const char *s)
         else if ((*p & 0xF8) == 0xF0) { cp = *p & 0x07; extra = 3; }
         else                          { cp = '?';       extra = 0; }
         p++;
-        while (extra-- > 0 && (*p & 0xC0) == 0x80) {
+        while (extra-- > 0 && p < end && (*p & 0xC0) == 0x80) {
             cp = (cp << 6) | (*p++ & 0x3F);
         }
 
@@ -143,6 +145,11 @@ static void send_text(const char *s)
         n += rl;
     }
     send(out, n);
+}
+
+static void send_text(const char *s)
+{
+    send_text_n(s, strlen(s));
 }
 
 static void send_image(const uint8_t *img, uint16_t rows)
@@ -188,10 +195,12 @@ static void send_header(void)
     char date[24], time[24];
     settings_get(&s);
     clock_get_status(&c);
-    // No location typed in: use the city of the timezone ("America/Los_Angeles" -> "Los Angeles")
+    // No location typed in: use the town of the weather ZIP code, or, while there is none,
+    // the city of the timezone ("America/Los_Angeles" -> "Los Angeles")
     char city[CLOCK_TZ_MAX] = "";
+    weather_get_place(city, sizeof(city));   // "Ann Arbor, MI"
     const char *slash = strrchr(c.timezone, '/');
-    if (slash) {
+    if (!city[0] && slash) {
         strlcpy(city, slash + 1, sizeof(city));
         for (char *p = city; *p; p++) {
             *p = *p == '_' ? ' ' : *p;
@@ -201,20 +210,81 @@ static void send_header(void)
     bool has_date = s.show_date && clock_format_now(date, sizeof(date), HEADER_DATE_FORMAT);
     bool has_time = s.show_time && clock_format_now(time, sizeof(time), HEADER_TIME_FORMAT);
 
-    send_text("TikPrint");
-    if (s.show_location && location[0]) {
-        send_text(" | ");
-        send_text(location);
-    }
+    // Left half and right half, as on tickets drawn by the page:
+    //   TikPrint | Ann Arbor, MI                      Nov 20, 2026 | 10:05 PM EST
+    char left[CLOCK_TZ_MAX + 16], right[56] = "";
+    snprintf(left, sizeof(left), "TikPrint%s%s", s.show_location && location[0] ? " | " : "",
+             s.show_location ? location : "");
     if (has_date || has_time) {
-        send_text("  ");
-        send_text(has_date ? date : time);
-        if (has_date && has_time) {
-            send_text(" | ");
-            send_text(time);
-        }
+        snprintf(right, sizeof(right), "%s%s%s", has_date ? date : time, has_date && has_time ? " | " : "",
+                 has_date && has_time ? time : "");
+    }
+    // Count characters, not bytes: an accented letter is stored as two bytes but prints as one.
+    int used = 0;
+    for (const char *p = left; *p; p++) {
+        used += ((unsigned char)*p & 0xC0) != 0x80;
+    }
+    int gap = HEADER_COLS - used - (int)strlen(right);
+    if (gap < 2) {
+        gap = 2;   // too long for one line: the printer wraps it
+    }
+
+    // The small font fits the whole header on one line, pushed out to both edges.
+    CMD("\x1BM\x01");   // ESC M 1: small font (9 dots wide instead of 12)
+    send_text(left);
+    if (right[0]) {
+        char spaces[HEADER_COLS + 1];
+        memset(spaces, ' ', sizeof(spaces));
+        spaces[gap < HEADER_COLS ? gap : HEADER_COLS] = 0;
+        send_text(spaces);
+        send_text(right);
     }
     send_text("\n");
+    CMD("\x1BM\x00");   // ESC M 0: back to the normal font
+}
+
+/*
+ * A ticket laid out by the page: image rows and lines in the built-in font, in turn
+ * (the bytes are described under "Layout" in printer.h).
+ * A line of text is set up with three commands, then sent like any other text:
+ *   GS ! n    size: n = 0x00 normal, 0x11 twice as wide and tall, 0x22 three times, ...
+ *   ESC E n   bold on (1) or off (0)
+ *   ESC - n   underline off (0), thin (1) or thick (2)
+ */
+static void send_layout(const printer_job_t *job)
+{
+    const uint8_t *p = job->layout, *end = p + job->layout_len;
+    uint16_t row = 0;   // image rows printed so far
+    while (p < end) {
+        if (*p == LAYOUT_ROWS) {
+            uint16_t rows = p[1] | (p[2] << 8);
+            send_image(job->image + (size_t)row * PRINTER_WIDTH_BYTES, rows);
+            row += rows;
+            p += 3;
+            continue;
+        }
+        uint8_t size = p[1], runs = p[2];   // LAYOUT_LINE
+        p += 3;
+        const char set_size[] = { 0x1D, '!', (char)(((size - 1) << 4) | (size - 1)) };
+        send(set_size, sizeof(set_size));
+        for (uint8_t i = 0; i < runs; i++) {
+            uint8_t style = p[0], len = p[1];
+            const char set_style[] = { 0x1B, 'E', (style & LAYOUT_BOLD) ? 1 : 0,
+                                       0x1B, '-', (style & LAYOUT_UNDERLINE) ? (size > 1 ? 2 : 1) : 0 };
+            send(set_style, sizeof(set_style));
+            send_text_n((const char *)p + 2, len);
+            p += 2 + len;
+        }
+        if (runs == 0) {
+            send_text(" ");   // an empty line: the space makes the printer feed a line of this text size
+        }
+        send_text("\n");
+    }
+    CMD("\x1D!\x00" "\x1B" "E\x00" "\x1B-\x00");   // back to normal size, no bold, no underline
+    if (job->image && row < job->image_rows) {         // rows no part asked for: the file under the text
+        send_image(job->image + (size_t)row * PRINTER_WIDTH_BYTES, job->image_rows - row);
+    }
+    send_footer();
 }
 
 static void send_job(const printer_job_t *job)
@@ -222,8 +292,15 @@ static void send_job(const printer_job_t *job)
     CMD("\x1B@");        // ESC @: reset the printer to its defaults
     CMD("\x1Bt\x00");    // ESC t 0: code page 437 (matches send_text above)
 
+    if (job->layout && job->layout_len) {
+        send_layout(job);
+        finish_ticket();
+        return;
+    }
+
     // Normally the page has drawn the text into the image, in the font picked there.
-    // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl).
+    // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl),
+    // or for lines set in the page's "Printer default" font (send_layout above).
     if (!job->text_in_image) {
         send_header();
         if (job->source[0]) {   // the ticket number is not printed

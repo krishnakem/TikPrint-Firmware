@@ -5,6 +5,7 @@ Plug the board into a computer with USB-C and it appears as a small network.
 The web UI is at **http://tikprint.local** (or **http://192.168.7.1** if the name does not resolve).
 
 Status: **Milestone 5** (tickets print on the real thermal printer. Wi-Fi setup and the `tikprint.local` name work over USB and Wi-Fi. The board updates itself from GitHub releases: Settings > Check for updates).
+Automations are being added in steps: **step 1 of 4, weather tickets on request**, is in (see Automations).
 
 ## The one USB-C port is two devices
 
@@ -109,6 +110,20 @@ curl --data-binary @build/tikprint_firmware.bin http://192.168.7.1/api/update
 
 Over Wi-Fi this is refused.
 
+## The "Printer default" font
+
+The last entry in the toolbar's font menu is the font built into the printer.
+
+- A line set **entirely** in it is not drawn as dots: the board sends the words and the printer
+  prints them itself (sharp, and quick). Other lines, and pictures, still print as dots around it.
+- The printer's letters are 12 dots wide and 24 tall, 48 to a line. Bigger text is a whole number of
+  times that (2x, 3x, ...), so the size picked is rounded. Bold and underline work; italics do not exist.
+- On screen a look-alike font stands in, at the printer's exact letter width, so lines break where
+  they will on paper. The letter shapes differ a little on paper.
+- Printer-font words that share a line with another font are drawn as dots, in the look-alike.
+- The ticket header can use it too: click the header, then pick the font.
+- How it is sent: `"parts"` in the print request (`build_layout` in `main/api.c`, "Layout" in `main/printer.h`).
+
 ## API quick reference
 
 ```sh
@@ -130,6 +145,8 @@ curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another
 curl -X POST http://tikprint.local/api/update/check     # ask GitHub for the latest release (answer shows up in /api/status)
 curl -X POST http://tikprint.local/api/update/install   # download it and restart into it (only if it is newer)
 curl --data-binary @build/tikprint_firmware.bin http://192.168.7.1/api/update   # install from a file: USB cable only
+curl -d '{"zip":"48104"}' http://tikprint.local/api/automations/weather          # the ZIP code weather tickets are for
+curl -X POST http://tikprint.local/api/automations/weather/print-now            # print today's weather now (see Automations)
 ```
 
 `/api/status` also reports the firmware: `"boot_id": 123456789` (new after every restart) and
@@ -161,6 +178,62 @@ Two things set it again:
 - Date and time on the ticket header come from this clock (see Ticket header).
 - The timings are named constants at the top of `main/clock.c` and of the "Clock" code in `web/index.html`.
 - There is no scheduler yet: the clock is the groundwork for scheduled prints.
+
+## Automations
+
+Tickets the board makes by itself, with no computer involved. Everything runs on the board:
+there is no TikPrint server, and nothing here costs anything to run.
+
+So far: **weather tickets on request**. The schedule, the Todoist connector and the
+Automations section of the page are the next steps.
+
+### Weather
+
+US only, from the National Weather Service (https://api.weather.gov): free, no account, no key.
+
+```sh
+curl -d '{"zip":"48104"}' http://tikprint.local/api/automations/weather      # once: set your ZIP code
+curl -X POST http://tikprint.local/api/automations/weather/print-now        # print today's weather
+curl -d '{"kind":"rest"}' http://tikprint.local/api/automations/weather/print-now       # rest of today
+curl -d '{"kind":"tomorrow"}' http://tikprint.local/api/automations/weather/print-now   # tomorrow
+curl http://tikprint.local/api/status       # "automations": how it went
+```
+
+- The board needs Wi-Fi with internet for this. Over the USB cable alone it cannot reach the weather service.
+- `print-now` answers at once; the ticket follows a few seconds later. `/api/status` shows
+  `"automations": {"weather": {"zip": "48104", "place": "Ann Arbor, MI", "busy": false, "last": {"ok": true, "ticket": 42, ...}}}`.
+  If it failed, `"last"` has `"ok": false` with an `"error"` (`no_zip`, `no_wifi`, `unreachable`,
+  `bad_answer`, `queue_full`) and a `"message"` in plain words.
+- The ticket: alerts first if there are any, then one short block per part of the day
+  (name, temperature, chance of rain or snow, a few words, wind), then the credit line.
+  The layout is in `main/weather_ticket.c`.
+- It prints in the **printer's built-in font**, 48 characters per line (`PRINTER_TEXT_COLS` in
+  `main/printer.h`). Tickets from the page are drawn by the browser; here there is no browser.
+- **ZIP code → place** uses a table inside the firmware (`data/zip_table.bin`, 33,791 ZIP codes,
+  270 KB), so no lookup service is needed. It is made from the US Census Bureau's public-domain
+  ZCTA gazetteer by `tools/make_zip_table.py` (how to rebuild it is at the top of that file).
+  A few ZIP codes that are only PO boxes are not in it: use a neighbouring one.
+- The table is part of the firmware file, like the fonts, so it arrives with a normal update
+  and `partitions.csv` did not have to change.
+- **Being a good guest** (`main/weather.c`): every request says who is asking
+  (`TikPrint/<version> (<contact>)`, the contact is `APP_CONTACT` in `main/config.h`). The
+  forecast is kept in memory and reused for as long as the weather service says it is good for
+  (usually an hour); where your ZIP code's forecast lives is saved on the board and only looked
+  up again if it stops working. Scheduled prints will wait a random 0–60 seconds first, so
+  printers do not all ask at the same second.
+- To try it without paper: every ticket is also written to the log (`idf.py monitor`) and kept
+  at `/api/last-ticket`. With no printer at all, switch to the fake printer (see Printing).
+- The timings and size limits are named constants at the top of `main/weather.c`.
+
+## To do before launch
+
+- **A setup PIN or password for the page and the API.** Today anyone on the same Wi-Fi can open
+  `tikprint.local`, print, and change settings. That matters on shared Wi-Fi (a dorm, an office).
+  Not built yet.
+- **Secure Boot and flash encryption.** Not turned on: this is a prototype, and turning them on
+  burns eFuses, which is permanent. Until then, anything saved on the board (the Wi-Fi password,
+  later a connector's token) can be read by someone who has the board in their hands.
+- **Set `APP_CONTACT` in `main/config.h`** to a real contact email. The weather service asks for one.
 
 ## Printing
 
@@ -254,7 +327,8 @@ TikPrint | Los Angeles                 NOV 20, 2026 | 10:05 PM PST
 ```
 
 - `TikPrint` is always there. Location, date and time each have a switch in Settings (the gear).
-- Location is what you type in Settings, shown as typed. Left empty, it is the city of the timezone.
+- Location is filled in by itself: it is the town and state of the weather ZIP code, e.g. `Ann Arbor, MI` (see Automations). Until a ZIP
+  code is set it is the city of the timezone. Typing something in Settings overrides both, shown as typed.
 - To change the header's font: click the header on the ticket (it lights up), then pick a font in
   the toolbar. The other tools fade while the header is selected, since only the font applies to it.
   Click anywhere else to go back to the text.
@@ -329,11 +403,17 @@ curl http://tikprint.local/api/diag/printer-status
 | `main/wifi_mgr.c` | Wi-Fi: scan, join, forget, reconnect; credentials saved on the board (NVS) |
 | `main/api.c` | The JSON API the UI calls (`/api/...`) |
 | `main/counter.c` | Ticket counter saved on the board (NVS) |
-| `main/settings.c` | Settings saved on the board (NVS): what the ticket header shows |
+| `main/settings.c` | Settings saved on the board (NVS): what the ticket header shows, the weather ZIP code |
 | `main/clock.c` | The clock: time from the browser or the internet, timezone saved on the board (NVS) |
 | `main/fw_update.c` | Installing new firmware: write to the spare slot, check, restart, go back if it fails |
 | `main/fw_github.c` | Finds and downloads new firmware from this repository's GitHub releases |
 | `.github/workflows/release.yml` | Builds and publishes a release when the version number changes |
+| `main/config.h` | Product-wide constants: the contact sent to the weather service |
+| `main/automations.c` | The background task that fetches and prints automations |
+| `main/weather.c` | Talks to the National Weather Service: forecast and alerts, kept and reused |
+| `main/weather_ticket.c` | Turns the forecast into the text of a ticket |
+| `main/zip_table.c`, `data/zip_table.bin` | ZIP code → latitude/longitude table inside the firmware |
+| `tools/make_zip_table.py` | Builds that table from the US Census gazetteer file |
 | `main/printer.h`, `main/printer.c` | The printer interface the rest of the code uses |
 | `main/print_queue.c` | The print queue: tickets wait in line and print one at a time |
 | `main/printer_thermal.c` | Real printer: sends ESC/POS commands over a serial wire and reads its status back |

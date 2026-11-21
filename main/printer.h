@@ -9,6 +9,7 @@
 #define PRINTER_WIDTH_DOTS   576
 #define PRINTER_WIDTH_BYTES  (PRINTER_WIDTH_DOTS / 8)
 #define PRINTER_MAX_ROWS     8192   // one print: up to 4096 rows of text drawn by the page + a 4096-row file
+#define PRINTER_TEXT_COLS    48     // characters per line in the printer's built-in font (12 dots each)
 
 /** One thing to print. Pointers only need to stay valid during printer_print_job(): the queue takes a copy. */
 typedef struct {
@@ -20,7 +21,30 @@ typedef struct {
     uint16_t image_rows;    // number of rows in image (width is always PRINTER_WIDTH_DOTS)
     bool text_in_image;     // the page already drew number, source, title and body at the top of the image
                             // (in its own font), so the printer must not print them again in its built-in font
+    const uint8_t *layout;  // optional: the ticket as a list of parts, see "Layout" below. NULL if none
+    size_t layout_len;      // number of bytes in layout
 } printer_job_t;
+
+/*
+ * Layout: a ticket whose lines are partly image and partly text in the printer's built-in font
+ * (the "Printer default" font on the page). It is a list of parts, printed top to bottom.
+ * Each part is a few bytes:
+ *
+ *   LAYOUT_ROWS, low, high              print the next (low + 256 * high) rows of the image
+ *   LAYOUT_LINE, size, runs, then       print one line of text, size = 1..8 times the font's normal size.
+ *     runs times: style, len, text      A run is len bytes of text (UTF-8) in one style:
+ *                                       style = 0, or LAYOUT_BOLD and/or LAYOUT_UNDERLINE added together
+ *
+ * Image rows that no part asks for are printed at the end. A job with a layout prints only
+ * the layout: title, body and source are kept for the log and /api/last-ticket.
+ * The bytes are made and checked in api.c (build_layout), so the driver can trust them.
+ */
+#define LAYOUT_ROWS       'R'
+#define LAYOUT_LINE       'L'
+#define LAYOUT_BOLD       0x01
+#define LAYOUT_UNDERLINE  0x02
+#define LAYOUT_MAX_SIZE   8      // largest text size the printer has
+#define LAYOUT_MAX_RUN    255    // most bytes of text in one run (its length is stored in one byte)
 
 /** What a job was given when it joined the print queue. */
 typedef struct {

@@ -16,6 +16,8 @@
  *   POST /api/update/check   ask GitHub whether there is newer firmware (the answer shows up in /api/status)
  *   POST /api/update/install download the newer firmware from GitHub and restart into it
  *   POST /api/update         install firmware from a file. Only over the USB cable (see update_post)
+ *   POST /api/automations/weather            {"zip": "48104"}: the ZIP code weather tickets are for
+ *   POST /api/automations/weather/print-now  fetch the weather and print it now ({"kind": "today"|"rest"|"tomorrow"}, optional)
  */
 #include <string.h>
 #include <stdlib.h>
@@ -40,12 +42,14 @@
 #include "settings.h"
 #include "fw_github.h"
 #include "fw_update.h"
+#include "automations.h"
+#include "zip_table.h"
 
 static const char *TAG = "api";
 
 #define MAX_BODY 512
 #define MAX_NETS 24
-#define MAX_PRINT_META (16 * 1024)
+#define MAX_PRINT_META (32 * 1024)     // a ticket of printer-font lines lists every line in its JSON
 #define MAX_PRINT_BODY (4 + MAX_PRINT_META + PRINTER_MAX_ROWS * PRINTER_WIDTH_BYTES)
 #define UPDATE_CHUNK 4096          // a firmware upload is written to flash in pieces of this size
 #define UPDATE_MAX_STALLS 6        // give up on an upload after this many 5 s waits in a row with no data
@@ -242,6 +246,38 @@ static void add_settings(cJSON *root)
     cJSON_AddStringToObject(set, "header_font", s.header_font);
 }
 
+/* The "automations" part of /api/status:
+ *   {"weather":{"zip":"48104","place":"Ann Arbor, MI","busy":false,
+ *               "last":{"ok":true,"error":"","message":"","ticket":42,"s_ago":12}}}
+ * "zip" is "" until one is set. "place" is "" until the weather service has been asked about that ZIP code.
+ * "busy" is true while a weather ticket is being fetched. "last" is how the latest one went (null if none
+ * since the board started); when "ok" is false, "error" and "message" say why and there is no "ticket". */
+static void add_automations(cJSON *root)
+{
+    char zip[SETTINGS_ZIP_MAX], place[WEATHER_PLACE_MAX];
+    automations_weather_status_t w;
+    settings_get_weather_zip(zip);
+    weather_get_place(place, sizeof(place));
+    automations_get_weather_status(&w);
+
+    cJSON *weather = cJSON_AddObjectToObject(cJSON_AddObjectToObject(root, "automations"), "weather");
+    cJSON_AddStringToObject(weather, "zip", zip);
+    cJSON_AddStringToObject(weather, "place", place);
+    cJSON_AddBoolToObject(weather, "busy", w.busy);
+    if (!w.ran) {
+        cJSON_AddNullToObject(weather, "last");
+        return;
+    }
+    cJSON *last = cJSON_AddObjectToObject(weather, "last");
+    cJSON_AddBoolToObject(last, "ok", w.ok);
+    cJSON_AddStringToObject(last, "error", w.error);
+    cJSON_AddStringToObject(last, "message", w.message);
+    if (w.ok) {
+        cJSON_AddNumberToObject(last, "ticket", w.ticket);
+    }
+    cJSON_AddNumberToObject(last, "s_ago", w.s_ago);
+}
+
 /* ---------- GET /api/status ---------- */
 static esp_err_t status_get(httpd_req_t *req)
 {
@@ -286,6 +322,7 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     add_clock_status(root);
     add_settings(root);
+    add_automations(root);
     // Firmware: "id" changes with every build, "slot" is where it runs from, "boot_id" is a new number
     // after every restart. The rest is about updates from GitHub (see fw_github.h): "latest" is the newest
     // release ("" if not known), "available" says it is newer than this one, "state" is what the board is
@@ -562,10 +599,14 @@ static esp_err_t wifi_forget_post(httpd_req_t *req)
  *   1. 4 bytes: length N of the JSON that follows (little-endian)
  *   2. N bytes: JSON {"title": "...", "body": "...", "source": "...",
  *                     "image": {"width": 576, "height": H},   (optional)
- *                     "text_in_image": true}                  (optional, see below)
+ *                     "text_in_image": true,                  (optional, see below)
+ *                     "parts": [...]}                         (optional, see below)
  *   3. if "image" is present: H * 72 bytes of raw image bits.
  *      "text_in_image" means the page drew the text at the top of the image, in its own
  *      font. title/body/source are then only kept for the log and /api/last-ticket.
+ *      "parts" is for tickets with lines in the printer's built-in font (the page's
+ *      "Printer default" font): the ticket top to bottom, as image rows and lines of
+ *      text in turn (see build_layout). Those lines are then not in the image.
  *      The browser has already turned the picture or PDF into dots, 576 wide and
  *      pure black/white, so the board never has to decode JPG, PNG or PDF.
  * The ticket joins the print queue and the reply comes back at once:
@@ -580,6 +621,73 @@ static esp_err_t print_fail(httpd_req_t *req, const char *error, const char *mes
     cJSON_AddStringToObject(root, "error", error);
     cJSON_AddStringToObject(root, "message", message);
     return send_json(req, root);
+}
+
+/*
+ * Turn the "parts" of a ticket laid out by the page into the bytes the printer driver reads
+ * (see "Layout" in printer.h). Each part is one of:
+ *   {"rows": 120}                                             the next 120 rows of the image
+ *   {"size": 2, "runs": [{"text": "Total", "bold": true},     one line in the printer's built-in font,
+ *                        {"text": " 5.00", "underline": true}]}   size = 1..8 times its normal size
+ * Returns NULL if the parts are not in that form, or ask for more image rows than there are.
+ * The result never needs more than max_len bytes (it is shorter than the JSON it came from). free() it.
+ */
+static uint8_t *build_layout(const cJSON *parts, int image_rows, size_t max_len, size_t *len_out)
+{
+    uint8_t *out = heap_caps_malloc(max_len, MALLOC_CAP_SPIRAM);
+    if (!out) {
+        return NULL;
+    }
+    size_t n = 0;
+    int rows_used = 0;
+    const cJSON *part;
+    cJSON_ArrayForEach(part, parts) {
+        const cJSON *jrows = cJSON_GetObjectItem(part, "rows");
+        const cJSON *jruns = cJSON_GetObjectItem(part, "runs");
+        if (cJSON_IsNumber(jrows)) {
+            int rows = jrows->valueint;
+            if (rows < 1 || rows > image_rows - rows_used || n + 3 > max_len) {
+                goto bad;
+            }
+            rows_used += rows;
+            out[n++] = LAYOUT_ROWS;
+            out[n++] = rows & 0xFF;
+            out[n++] = rows >> 8;
+            continue;
+        }
+        const cJSON *jsize = cJSON_GetObjectItem(part, "size");
+        int size = cJSON_IsNumber(jsize) ? jsize->valueint : 1;
+        int runs = cJSON_IsArray(jruns) ? cJSON_GetArraySize(jruns) : -1;
+        if (size < 1 || size > LAYOUT_MAX_SIZE || runs < 0 || runs > 255 || n + 3 > max_len) {
+            goto bad;
+        }
+        out[n++] = LAYOUT_LINE;
+        out[n++] = (uint8_t)size;
+        out[n++] = (uint8_t)runs;
+        const cJSON *run;
+        cJSON_ArrayForEach(run, jruns) {
+            const cJSON *jtext = cJSON_GetObjectItem(run, "text");
+            size_t len = cJSON_IsString(jtext) ? strlen(jtext->valuestring) : SIZE_MAX;
+            if (len > LAYOUT_MAX_RUN || n + 2 + len > max_len) {
+                goto bad;
+            }
+            out[n++] = (cJSON_IsTrue(cJSON_GetObjectItem(run, "bold")) ? LAYOUT_BOLD : 0) |
+                       (cJSON_IsTrue(cJSON_GetObjectItem(run, "underline")) ? LAYOUT_UNDERLINE : 0);
+            out[n++] = (uint8_t)len;
+            for (size_t i = 0; i < len; i++) {
+                // Only printable text reaches the printer: a control character (a line break, or
+                // the ESC that starts a printer command) becomes a space.
+                uint8_t c = (uint8_t)jtext->valuestring[i];
+                out[n++] = (c < 0x20 || c == 0x7F) ? ' ' : c;
+            }
+        }
+    }
+    *len_out = n;
+    return out;
+
+bad:
+    free(out);
+    return NULL;
 }
 
 static esp_err_t print_post(httpd_req_t *req)
@@ -614,6 +722,7 @@ static esp_err_t print_post(httpd_req_t *req)
     }
 
     esp_err_t ret;
+    uint8_t *layout = NULL;
     const cJSON *jt = cJSON_GetObjectItem(meta, "title");
     const cJSON *jb = cJSON_GetObjectItem(meta, "body");
     const cJSON *js = cJSON_GetObjectItem(meta, "source");
@@ -635,6 +744,16 @@ static esp_err_t print_post(httpd_req_t *req)
         job.image = buf + 4 + meta_len;
         job.image_rows = h;
         job.text_in_image = cJSON_IsTrue(cJSON_GetObjectItem(meta, "text_in_image"));
+    }
+    const cJSON *jparts = cJSON_GetObjectItem(meta, "parts");
+    if (cJSON_IsArray(jparts) && cJSON_GetArraySize(jparts) > 0) {
+        layout = build_layout(jparts, job.image_rows, meta_len, &job.layout_len);
+        if (!layout) {
+            ret = print_fail(req, "bad_layout", "The ticket's layout could not be read");
+            goto out;
+        }
+        job.layout = layout;
+        job.text_in_image = true;   // the page laid the whole ticket out, text included
     }
     if (!job.title[0] && !job.body[0] && !job.image) {
         ret = print_fail(req, "empty", "Nothing to print");
@@ -663,6 +782,7 @@ static esp_err_t print_post(httpd_req_t *req)
 
 out:
     cJSON_Delete(meta);
+    free(layout);
     free(buf);
     return ret;
 }
@@ -935,6 +1055,79 @@ static esp_err_t update_post(httpd_req_t *req)
     return sent;
 }
 
+/* ---------- POST /api/automations/weather ----------
+ * {"zip": "48104"} sets the ZIP code weather tickets are for. {"zip": ""} clears it.
+ * The ZIP code is looked up in the table inside the firmware (no internet needed); its place
+ * name is then fetched in the background and appears in /api/status a few seconds later.
+ * Reply: {"ok":true,"automations":{...as in /api/status}}, or {"ok":false,"error":"bad_zip","message":"..."}. */
+static esp_err_t weather_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *jzip = cJSON_GetObjectItem(body, "zip");
+    int lat_e2, lon_e2;
+    bool ok = cJSON_IsString(jzip) && (!jzip->valuestring[0] || zip_table_lookup(jzip->valuestring, &lat_e2, &lon_e2)) &&
+              settings_set_weather_zip(jzip->valuestring) == ESP_OK;
+    cJSON_Delete(body);
+    if (!ok) {
+        return refuse(req, "400 Bad Request", "bad_zip", "That is not a US ZIP code the printer knows");
+    }
+    automations_weather_zip_changed();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    add_automations(root);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/automations/weather/print-now ----------
+ * Fetch the weather and print it now. The body is optional: {"kind": "today"} (the default),
+ * {"kind": "rest"} (rest of today) or {"kind": "tomorrow"}.
+ * Replies {"ok":true} at once; the ticket follows a few seconds later, and how it went shows
+ * up in /api/status ("automations": "weather": "busy", then "last").
+ * This is a manual print, so it does not count towards the limit on scheduled prints. */
+static esp_err_t weather_print_now_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    weather_kind_t kind = WEATHER_TODAY;
+    if (req->content_len > 0) {
+        cJSON *body = read_json_body(req);
+        if (!body) {
+            return ESP_OK;
+        }
+        const cJSON *jkind = cJSON_GetObjectItem(body, "kind");
+        const char *name = cJSON_IsString(jkind) ? jkind->valuestring : "today";
+        bool known = false;
+        for (weather_kind_t k = WEATHER_TODAY; k <= WEATHER_TOMORROW; k++) {
+            if (strcmp(name, weather_kind_name(k)) == 0) {
+                kind = k;
+                known = true;
+            }
+        }
+        cJSON_Delete(body);
+        if (!known) {
+            return refuse(req, "400 Bad Request", "bad_kind", "Use \"today\", \"rest\" or \"tomorrow\"");
+        }
+    }
+    char zip[SETTINGS_ZIP_MAX];
+    settings_get_weather_zip(zip);
+    if (!zip[0]) {
+        return refuse(req, "409 Conflict", "no_zip", weather_result_message(WEATHER_NO_ZIP));
+    }
+    if (automations_weather_print_now(kind) != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is still getting the last weather ticket");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
 void api_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -954,6 +1147,8 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/update/check", .method = HTTP_POST, .handler = update_check_post },
         { .uri = "/api/update/install", .method = HTTP_POST, .handler = update_install_post },
         { .uri = "/api/update",       .method = HTTP_POST, .handler = update_post },
+        { .uri = "/api/automations/weather", .method = HTTP_POST, .handler = weather_post },
+        { .uri = "/api/automations/weather/print-now", .method = HTTP_POST, .handler = weather_print_now_post },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(server, &routes[i]);
