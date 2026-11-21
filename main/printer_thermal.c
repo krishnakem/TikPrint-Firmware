@@ -28,6 +28,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -50,19 +51,18 @@ static const char *TAG = "thermal_printer";
 #define HEADER_TIME_FORMAT "%I:%M %p %Z"   //                                        e.g. "10:05 PM EST"
 
 /* Image rows sent per command. Small bands keep the printer's memory from overflowing. */
-#define BAND_ROWS 32
+#define BAND_ROWS 64
 
-/* Pacing for dark images.
- * There is no "wait, I'm busy" wire between the printer and the board, so the board must not
- * send faster than the printer prints. Mostly-white rows (text) print faster than the serial
- * wire can deliver them. Rows with a lot of black are slow, because the printer heats a row's
- * dots a group at a time. If the board keeps sending at full speed through a dark image, the
- * printer's small memory fills up and it drops what does not fit: the rest of the picture
- * comes out squashed. So after each band the board waits a little, longer the blacker the band:
- * PACE_US_PER_BLACK_DOT microseconds per black dot. A fully black row (576 dots) adds about
- * 14 ms; a row of text adds almost nothing. Raise it if dark images still come out squashed
- * towards the end; lower it to print dark images faster. */
-#define PACE_US_PER_BLACK_DOT 24
+/* Blank rows printed after a ticket's image: a bottom margin about as tall as the top one.
+ * (The top margin comes for free: it is the paper between the print head and the cutter.)
+ * It is also a trial fix. Dark pictures came out squashed in their last third, although the
+ * dots sent were right. With the footer, the last thing the printer prints is blank paper,
+ * so if it is "the end" that gets squashed, the picture no longer is. */
+#define FOOTER_ROWS 64
+
+/* Speed test (/api/diag/printer-speed): rows per sample, and how long to wait for the printer to say "done". */
+#define SPEED_ROWS       48
+#define SPEED_TIMEOUT_MS 4000
 
 #define TEST_LINE_MAX 64
 
@@ -86,6 +86,7 @@ static const char *TAG = "thermal_printer";
 #define ST4_PAPER_END      0x60   //                    no paper
 
 static SemaphoreHandle_t s_uart_lock;   // held for one whole conversation with the printer
+static int s_speed_xoff, s_speed_xon;   // counted during the speed test
 
 static void send(const void *data, size_t len)
 {
@@ -157,26 +158,20 @@ static void send_image(const uint8_t *img, uint16_t rows)
 {
     for (uint16_t y = 0; y < rows; y += BAND_ROWS) {
         uint16_t h = rows - y < BAND_ROWS ? rows - y : BAND_ROWS;
-        const uint8_t *band = img + (size_t)y * PRINTER_WIDTH_BYTES;
-        size_t len = (size_t)h * PRINTER_WIDTH_BYTES;
         // GS v 0: "print a raster image". Then width in bytes and height in rows, low byte first.
         const uint8_t head[] = { 0x1D, 'v', '0', 0,
                                  PRINTER_WIDTH_BYTES & 0xFF, PRINTER_WIDTH_BYTES >> 8,
                                  h & 0xFF, h >> 8 };
         send(head, sizeof(head));
-        send(band, len);
-
-        // Give the printer time to print this band before the next one arrives (see PACE_US_PER_BLACK_DOT).
-        uint32_t black = 0;
-        for (size_t i = 0; i < len; i++) {
-            black += (uint32_t)__builtin_popcount(band[i]);
-        }
-        uint32_t wait_ms = black * PACE_US_PER_BLACK_DOT / 1000;
-        if (wait_ms > 0) {
-            uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);   // the wait starts once the band has really left
-            vTaskDelay(pdMS_TO_TICKS(wait_ms));
-        }
+        send(img + (size_t)y * PRINTER_WIDTH_BYTES, (size_t)h * PRINTER_WIDTH_BYTES);
     }
+}
+
+/* Blank paper, sent as an all-white image so it is fed exactly like picture rows. */
+static void send_footer(void)
+{
+    static const uint8_t white[FOOTER_ROWS * PRINTER_WIDTH_BYTES];   // all zero = no black dots
+    send_image(white, FOOTER_ROWS);
 }
 
 static void finish_ticket(void)
@@ -258,6 +253,7 @@ static void send_job(const printer_job_t *job)
     }
     if (job->image && job->image_rows) {
         send_image(job->image, job->image_rows);
+        send_footer();
     }
     finish_ticket();
 }
@@ -400,6 +396,78 @@ esp_err_t printer_thermal_test(int baud, int pin, int invert)
              baud, s_pin, s_invert ? ", inverted" : "");
     ESP_LOGI(TAG, "test print: %d baud, GPIO%d%s", baud, s_pin, s_invert ? ", inverted" : "");
     send_test_line(line);
+    xSemaphoreGive(s_uart_lock);
+    return ESP_OK;
+}
+
+/* ---------- Speed test ----------
+ * Measures how fast the printer really prints, by density. For each sample it sends
+ * SPEED_ROWS rows that are a given share black, then the question "GS r 1" (paper sensor
+ * status). Unlike the DLE EOT questions, the printer answers that one in turn, only after
+ * it has dealt with everything sent before it. So the time until the answer is the time
+ * it needed for those rows.
+ * Compare with the serial wire, which delivers a row every 6.25 ms at 115200 baud: a
+ * sample that needs more than that per row is one the printer cannot keep up with. */
+static bool wait_in_turn_answer(uint32_t timeout_ms, uint8_t *answer)
+{
+    int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    uint8_t b;
+    while (esp_timer_get_time() < deadline) {
+        if (uart_read_bytes(PRINTER_UART, &b, 1, pdMS_TO_TICKS(20)) == 1) {
+            // XON / XOFF (0x11 / 0x13) are "go on" / "wait" signals some printers send. Count them, they are not the answer.
+            if (b == 0x13) { s_speed_xoff++; continue; }
+            if (b == 0x11) { s_speed_xon++; continue; }
+            *answer = b;
+            return true;
+        }
+    }
+    return false;
+}
+
+esp_err_t printer_thermal_speed_test(printer_speed_report_t *out)
+{
+    static const uint8_t SHARES[PRINTER_SPEED_SAMPLES] = { 0, 25, 50, 75, 100 };
+    static uint8_t band[SPEED_ROWS * PRINTER_WIDTH_BYTES];
+    const uint8_t ask[] = { 0x1D, 'r', 1 };   // GS r 1
+    memset(out, 0, sizeof(*out));
+    out->rows = SPEED_ROWS;
+
+    xSemaphoreTake(s_uart_lock, portMAX_DELAY);
+    s_speed_xoff = s_speed_xon = 0;
+    CMD("\x1B@");
+    uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    uart_flush_input(PRINTER_UART);
+
+    // First: does this printer answer the question at all?
+    uint8_t answer = 0;
+    send(ask, sizeof(ask));
+    out->answers = wait_in_turn_answer(500, &answer);
+    out->first_answer = out->answers ? answer : -1;
+
+    for (int i = 0; out->answers && i < PRINTER_SPEED_SAMPLES; i++) {
+        // A fine, even pattern with the wanted share of black dots (like the dots of a photo).
+        for (int y = 0; y < SPEED_ROWS; y++) {
+            for (int x = 0; x < PRINTER_WIDTH_DOTS; x++) {
+                bool black = ((x * 7 + y * 13) % 100) < SHARES[i];
+                uint8_t *byte = &band[y * PRINTER_WIDTH_BYTES + x / 8];
+                *byte = black ? (*byte | (0x80 >> (x % 8))) : (*byte & ~(0x80 >> (x % 8)));
+            }
+        }
+        int64_t start = esp_timer_get_time();
+        send_image(band, SPEED_ROWS);
+        send(ask, sizeof(ask));
+        uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
+        int64_t sent = esp_timer_get_time();
+        bool ok = wait_in_turn_answer(SPEED_TIMEOUT_MS, &answer);
+        out->black_percent[i] = SHARES[i];
+        out->send_ms[i] = (int)((sent - start) / 1000);
+        out->total_ms[i] = ok ? (int)((esp_timer_get_time() - start) / 1000) : -1;
+    }
+    out->xoff = s_speed_xoff;
+    out->xon = s_speed_xon;
+    finish_ticket();
+    uart_wait_tx_done(PRINTER_UART, portMAX_DELAY);
     xSemaphoreGive(s_uart_lock);
     return ESP_OK;
 }

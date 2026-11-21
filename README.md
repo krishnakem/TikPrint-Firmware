@@ -124,6 +124,7 @@ curl http://tikprint.local/api/last-ticket          # the last ticket that start
 open http://tikprint.local/api/last-ticket.pbm      # its image, exactly as the printer got it
 curl "http://tikprint.local/api/diag/ping?ip=1.1.1.1"   # make the board ping something (troubleshooting)
 curl http://tikprint.local/api/diag/printer-status            # ask the printer how it is: raw answer bytes + meaning (see Printer status)
+curl http://tikprint.local/api/diag/printer-speed             # print a 4 cm test strip and time how fast light and dark rows print
 curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
@@ -188,9 +189,8 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 - The pin, the serial speed (115200 baud, shown on the printer's self-test page) and whether the printer has a cutter
   are named constants at the top of `main/printer_thermal.c`.
 - A ticket is sent in the background; a tall image takes a few seconds.
-- Dark images are sent more slowly than light ones, so the printer can keep up. Without that, a dark
-  picture comes out squashed towards its end (the printer drops rows it has no room for). How much
-  slower is `PACE_US_PER_BLACK_DOT` at the top of `main/printer_thermal.c`.
+- Every ticket with an image ends in a blank footer about as tall as the top margin
+  (`FOOTER_ROWS` at the top of `main/printer_thermal.c`).
 - There is a print queue (`main/print_queue.c`). Pressing Print while a ticket is printing
   puts the new one in line, and the page says "Queued 0042, 2nd in line". Tickets print
   in the order they were sent.
@@ -224,6 +224,9 @@ The printer is an EM8026-CUT (80 mm, auto cutter). Use its **TTL** socket:
 
 - A file gets onto the ticket by dropping it, by choosing it, or by pasting it (Cmd+V / Ctrl+V):
   a copied picture, a screenshot, a file copied in Finder, or copied SVG code. JPG, PNG, SVG and PDF work.
+- A picture goes into the text where the cursor is, as a line of its own, like in a word processor:
+  type above it, below it, or between two pictures. Its ✕ or Backspace from the line below removes it.
+  A PDF, or a picture taller than 20 cm of paper (`INLINE_MAX_ROWS`), goes below the text instead.
 - An SVG has no fixed size, so the page draws it at twice the paper's width before turning it into
   dots (`SVG_PX` in `web/index.html`). A small icon comes out as sharp as a large drawing.
 - Files are prepared in the browser: blank margins are trimmed, the content is

@@ -116,6 +116,25 @@ const char *printer_name(void);
  */
 esp_err_t printer_test(int baud, int pin, int invert);
 
+/** What the speed test measured (see printer_thermal_speed_test). */
+#define PRINTER_SPEED_SAMPLES 5
+typedef struct {
+    bool answers;                              // the printer answers the "in turn" question the test relies on
+    int first_answer;                          // that answer's byte, or -1
+    int rows;                                  // rows printed per sample
+    int black_percent[PRINTER_SPEED_SAMPLES];  // how black each sample was
+    int send_ms[PRINTER_SPEED_SAMPLES];        // time to send the sample down the wire
+    int total_ms[PRINTER_SPEED_SAMPLES];       // time until the printer said it was done with it, or -1 if it never did
+    int xoff, xon;                             // "wait" / "go on" bytes the printer sent meanwhile
+} printer_speed_report_t;
+
+/**
+ * Print a short test strip and measure how fast the printer prints light and dark rows.
+ *   ESP_ERR_INVALID_STATE  a ticket is printing or waiting
+ *   ESP_ERR_NOT_SUPPORTED  the fake printer is in use
+ */
+esp_err_t printer_speed_test(printer_speed_report_t *out);
+
 /* Available drivers */
 extern const printer_driver_t printer_fake_driver;
 extern const printer_driver_t printer_thermal_driver;
@@ -124,3 +143,6 @@ extern const printer_driver_t printer_thermal_driver;
  *  baud > 0 = serial speed, pin >= 0 = board pin, invert 0/1 = flip the signal (-1 = leave as is).
  *  Call it through printer_test(), which makes sure no ticket is printing at the same time. */
 esp_err_t printer_thermal_test(int baud, int pin, int invert);
+
+/** Thermal driver only: the speed test. Call it through printer_speed_test(). */
+esp_err_t printer_thermal_speed_test(printer_speed_report_t *out);

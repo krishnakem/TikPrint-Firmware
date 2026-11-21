@@ -71,6 +71,12 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 #doc{width:576px;min-height:150px;transform-origin:0 0;outline:none;font:400 28px/1.35 "Inter",Helvetica,Arial,sans-serif;white-space:pre-wrap;overflow-wrap:break-word}
 /* faded hint on an empty Title / body line. It sits inside the line, so it follows that line's font and size. */
 #doc>.blank::before{content:attr(data-ph);color:#bbb;position:absolute;pointer-events:none}
+/* A picture inside the text: a line of its own that you can type above and below. It is shown as the
+   exact dots that will print. Its ✕ is drawn by CSS so that it is not part of the ticket's text. */
+#doc>.pic{position:relative;margin:6px 0;line-height:0;cursor:default;user-select:none;-webkit-user-select:none}
+#doc>.pic canvas{display:block;width:576px}
+#doc>.pic .rm{position:absolute;top:9px;right:9px;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.6);cursor:pointer}
+#doc>.pic .rm::before{content:"✕";color:#fff;font:400 17px/32px Helvetica,Arial,sans-serif}
 
 /* formatting toolbar */
 .tools{width:var(--col);margin-bottom:12px;display:flex;align-items:center;gap:4px;padding:5px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
@@ -927,8 +933,8 @@ function rasterize(c){
   return {height:h,data:out};
 }
 /* Paint the dots on the ticket. White dots stay see-through so the paper colour shows. */
-function showBits(b){
-  const c=$('prev'); c.height=b.height;
+function showBits(b,c=$('prev')){
+  c.height=b.height;
   const g=c.getContext('2d'), im=g.createImageData(PW,b.height), d=im.data;
   for(let y=0;y<b.height;y++)for(let x=0;x<PW;x++)if(b.data[y*(PW/8)+(x>>3)]&(0x80>>(x&7))){const i=(y*PW+x)*4; d[i]=d[i+1]=d[i+2]=17; d[i+3]=255}
   g.putImageData(im,0,0);
@@ -1063,19 +1069,34 @@ function closeJob(){ if(job&&job.close)job.close(); job=null; }
 
 /* Files the ticket can take */
 const canLoad=file=>file.type==='application/pdf'||/\.pdf$/i.test(file.name)||/^image\/(jpeg|png)$/.test(file.type)||isSvg(file);
+/* Where a file goes:
+   - a picture (JPG, PNG, SVG) goes INTO the text, at the cursor, as a line of its own. You can type above
+     and below it, and add as many as you like. (See "Pictures in the text" in the Editor code.)
+   - a PDF, or a picture too tall for that, goes below the text as before, where long files are
+     split into parts. */
+const INLINE_MAX_ROWS=1600;   // tallest picture that goes into the text (20 cm of paper)
 async function loadFile(file){
   if(!file)return;
-  const pdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
   if(!canLoad(file)){toast('Use a JPG, PNG, SVG, or PDF');return}
+  const pdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+  let ready=null;
+  if(!pdf){
+    try{
+      ready=pictureJob(await (isSvg(file)?decodeSvg(file):decodeImage(file)));
+      if(ready.parts.length===1&&ready.rows<=INLINE_MAX_ROWS){
+        insertPic(rasterize(await ready.render(ready.parts[0]))); $('file').value=''; return;
+      }
+    }catch(e){console.error(e); $('file').value=''; toast('Couldn’t read that image'); return}
+  }
   const id=++loadId, alive=()=>id===loadId;
   closeJob(); imgBits=null; $('pWait').textContent='Preparing…'; $('pImg').classList.remove('turning'); $('pImg').classList.add('on','busy');
-  let j=null;
-  try{ j=pdf?await pdfJob(file,alive,t=>{$('pWait').textContent=t}):pictureJob(await (isSvg(file)?decodeSvg(file):decodeImage(file))); }catch(e){ console.error(e); }
+  let j=ready;
+  try{ if(pdf)j=await pdfJob(file,alive,t=>{$('pWait').textContent=t}); }catch(e){ console.error(e); }
   if(!alive()){ if(j&&j.close)j.close(); return; }
   if(!j||!j.parts.length){
     if(j&&j.close)j.close();
     $('pImg').classList.remove('on','busy'); $('file').value='';
-    toast(j?'That PDF is blank':pdf?'Couldn’t read that PDF':'Couldn’t read that image'); return;
+    toast(j?'That PDF is blank':'Couldn’t read that PDF'); return;
   }
   job=j; j.cur=0; await showPart(0);
 }
@@ -1169,7 +1190,7 @@ function tidy(){
     el.querySelectorAll('[style]').forEach(d=>{d.style.fontSize=''});
   });
   // Everything was deleted: start again from the Title + body layout.
-  if(!doc.textContent&&(doc.children.length<2||!doc.firstElementChild.dataset.ph)){
+  if(!doc.textContent&&!doc.querySelector('.pic')&&(doc.children.length<2||!doc.firstElementChild.dataset.ph)){
     doc.innerHTML=TEMPLATE; if(document.activeElement===doc)caretTo(doc.firstElementChild);
   }
   // Hints. Pressing Enter copies a line, hint included, so only the first line with each hint keeps it.
@@ -1186,12 +1207,40 @@ doc.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.shiftKey||e.metaKey||e.ctrlKey||e.isComposing)return;
   const sel=getSelection(), b=lineAt(sel.anchorNode,sel.anchorOffset); if(!b||b.dataset.ph!==TITLE_HINT)return;
   e.preventDefault();
-  if(!b.nextElementSibling||b.nextElementSibling.textContent)b.insertAdjacentHTML('afterend','<div><br></div>');
+  if(!b.nextElementSibling||b.nextElementSibling.textContent||isPic(b.nextElementSibling))b.insertAdjacentHTML('afterend','<div><br></div>');
   caretTo(b.nextElementSibling); tidy();
 });
 /* Pasted text comes in plain, so it takes the style at the cursor rather than the web page's. */
 doc.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'))});
-function setDoc(html){doc.innerHTML=html||TEMPLATE;savedSel=null;tidy()}
+function setDoc(html){doc.innerHTML=html||TEMPLATE;savedSel=null;pics.clear();tidy()}
+
+/* ---- Pictures in the text ---- */
+/* A picture sits in the text as a line of its own (a box the cursor steps over, like in a word
+   processor). Type above it, below it, or between two of them; Backspace from the line below removes
+   it, and so does its ✕. Its dots are worked out once, when it is added, and kept in "pics";
+   printing copies exactly those dots to where the picture sits in the text. */
+const pics=new Map(); let picCount=0;   // picture id -> {height, data} (see rasterize)
+const isPic=el=>!!el&&el.classList.contains('pic');
+function insertPic(bits){
+  const id=String(++picCount), el=document.createElement('div'), c=mkCanvas(PW,bits.height), rm=document.createElement('button');
+  pics.set(id,bits); showBits(bits,c);
+  el.className='pic'; el.contentEditable='false'; el.dataset.pic=id;
+  rm.className='rm'; rm.setAttribute('aria-label','Remove picture'); el.append(c,rm);
+  // At the cursor's line; with no cursor in the text, at the end.
+  let line=savedSel&&doc.contains(savedSel.startContainer)?lineAt(savedSel.startContainer,savedSel.startOffset):null;
+  if(!line)line=doc.lastElementChild;
+  // An empty line gives its place to the picture and moves below it. A line with text (or the Title line) keeps its place.
+  const takePlace=line&&!isPic(line)&&!line.textContent&&line.dataset.ph!==TITLE_HINT;
+  if(!line)doc.append(el); else if(takePlace)line.before(el); else line.after(el);
+  // There is always a line to type on after a picture
+  let next=el.nextElementSibling;
+  if(!next||isPic(next)){next=document.createElement('div'); next.innerHTML='<br>'; el.after(next)}
+  doc.focus(); caretTo(next); tidy();
+}
+doc.addEventListener('click',e=>{
+  const rm=e.target.closest('.pic .rm'); if(!rm)return;
+  pics.delete(rm.parentElement.dataset.pic); rm.parentElement.remove(); tidy();
+});
 /* The line (direct child of the text box) that a node is in. */
 function lineAt(node,offset=0){
   if(node===doc)node=doc.childNodes[Math.min(offset,doc.childNodes.length-1)];
@@ -1285,8 +1334,13 @@ function docBits(source){
     };
     for(const w of n.data.matchAll(/\s+|\S+/g))piece(w.index,w.index+w[0].length);
   }
-  // start at the first line that has text (an empty Title line prints no blank gap), end at the last
-  const drawn=items.filter(it=>it.text), up=drawn.length?Math.min(...drawn.map(it=>it.y)):0, top=head-up;
+  // pictures in the text: where each one sits
+  const picItems=[...doc.querySelectorAll('.pic')].map(el=>{
+    const r=el.querySelector('canvas').getBoundingClientRect();
+    return {bits:pics.get(el.dataset.pic),y:(r.top-box.top)/k,bottom:(r.bottom-box.top)/k};
+  }).filter(p=>p.bits);
+  // start at the first line that has text or a picture (an empty Title line prints no blank gap), end at the last
+  const drawn=items.filter(it=>it.text).concat(picItems), up=drawn.length?Math.min(...drawn.map(it=>it.y)):0, top=head-up;
   const h=Math.ceil(top+drawn.reduce((b,it)=>Math.max(b,it.bottom),up)+8); if(h>TEXT_MAXH)return null;
   const c=mkCanvas(PW,h), g=c.getContext('2d',{willReadFrequently:true});
   g.fillStyle='#fff'; g.fillRect(0,0,PW,h); g.fillStyle='#000';
@@ -1298,6 +1352,11 @@ function docBits(source){
   }
   const v=greys(c), data=new Uint8Array(PW/8*h);
   for(let i=0;i<PW*h;i++)if(v[i]<TEXT_CUT)data[i>>3]|=0x80>>(i&7);
+  // the pictures' dots go in exactly as they are (they were turned into dots when they were added)
+  for(const p of picItems){
+    const y0=Math.round(top+p.y), rows=Math.min(p.bits.height,h-y0);
+    if(rows>0)data.set(p.bits.data.subarray(0,rows*PW/8),y0*PW/8);
+  }
   return {height:h,data};
 }
 const docText=()=>doc.innerText.trim();
@@ -1312,7 +1371,7 @@ function printBody(){
   const meta={title:'',body:docText().slice(0,3000),source:$('pSrc').classList.contains('on')?$('srcName').textContent:''};
   const file=$('pImg').classList.contains('on')&&imgBits?imgBits:null;
   const text=fontsOk?docBits(meta.source):null;
-  if(fontsOk&&!text)return null;
+  if(fontsOk&&!text)return null;   // too long for one ticket
   const rows=(text?text.height:0)+(file?file.height:0);
   if(rows)meta.image={width:PW,height:rows};
   if(text)meta.text_in_image=true;
@@ -1328,7 +1387,7 @@ const nth=n=>n+(n%100>10&&n%100<14?'th':['th','st','nd','rd'][n%10]||'th');   //
 const FEED_MS=px=>Math.round(Math.min(1100,Math.max(550,px*1.1)));   // how long the ticket takes to fly off, from the distance in pixels
 async function doPrint(){
   if(printing||offline)return;
-  if(!docText()&&!$('pImg').classList.contains('on')){doc.focus();return}
+  if(!docText()&&!doc.querySelector('.pic')&&!$('pImg').classList.contains('on')){doc.focus();return}
   if($('pImg').classList.contains('on')&&!imgBits){toast('Still preparing the file…');return}
   const body=printBody(); if(!body){toast('Too much text for one ticket');return}
   printing=true; $('printBtn').disabled=true;   // only while the ticket uploads: the board queues it, so Print works again right after
