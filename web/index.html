@@ -11,6 +11,7 @@
   --card:#f4f3f0; --hover:rgba(28,28,30,.05);
   --btn:#1c1c1e; --btn-ink:#fff; --ok:#2e9d5b;
   --paper:#fff; --paper-ink:#111;
+  --col:440px;   /* width of the centre column: toolbar, ticket, drop box, buttons */
   --mono:ui-monospace,"SF Mono",Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
 }
@@ -39,7 +40,7 @@ button{cursor:pointer;background:none;border:0;padding:0}
 main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;padding:96px 20px 80px}
 
 /* the ticket you type on */
-.paper{width:340px;background:var(--paper);color:var(--paper-ink);padding:18px 18px 26px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .3s}
+.paper{width:var(--col);background:var(--paper);color:var(--paper-ink);padding:22px 22px 30px;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.08);font-family:Helvetica,Arial,sans-serif;transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .3s}
 .paper::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:8px;background:linear-gradient(135deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x,linear-gradient(225deg,var(--paper) 50%,transparent 50%) 0 0/10px 8px repeat-x}
 /* Printing: the ticket flies up and off the top of the screen (--away is set to the distance when Print is pressed). */
 @keyframes fly{to{transform:translateY(var(--away))}}
@@ -65,18 +66,18 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 #doc>.blank::before{content:attr(data-ph);color:#bbb;position:absolute;pointer-events:none}
 
 /* formatting toolbar */
-.tools{width:340px;margin-bottom:12px;display:flex;align-items:center;gap:3px;padding:5px;background:var(--card);border:1px solid var(--line);border-radius:10px}
-.tools select{height:28px;min-width:0;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font-size:13px;padding:0 2px}
+.tools{width:var(--col);margin-bottom:12px;display:flex;align-items:center;gap:4px;padding:5px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
+.tools select{height:30px;min-width:0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);font-size:13px;padding:0 2px}
 #fFont{flex:1}
-#fSize{width:52px;flex:none}
-.tools button{width:27px;height:28px;flex:none;border-radius:6px;font-size:14px;color:var(--ink);display:grid;place-items:center}
+#fSize{width:58px;flex:none}
+.tools button{width:30px;height:30px;flex:none;border-radius:6px;font-size:14px;color:var(--ink);display:grid;place-items:center}
 .tools button:hover{background:var(--hover)}
 .tools button.on{background:var(--btn);color:var(--btn-ink)}
 .tools .sep{width:1px;height:18px;flex:none;background:var(--line);margin:0 2px}
 .p-img{position:relative;margin-top:10px;display:none}
 .p-img.on{display:block}
-/* 288px = half of the printer's 576 dots, so on a 2x screen one printer dot is exactly one screen pixel */
-.p-img canvas{display:block;width:288px;max-width:100%;margin:0 auto}
+/* same width as the text above it: both are 576 printer dots wide */
+.p-img canvas{display:block;width:100%}
 .p-img .p-wait{display:none;padding:26px 0;text-align:center;font:600 12px Helvetica,Arial,sans-serif;color:#999}
 .p-img.busy canvas,.p-img.busy .p-note,.p-img.busy .p-nav{display:none}
 .p-img.turning canvas{opacity:.3}
@@ -93,12 +94,12 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .p-src button{color:#999;font:inherit}
 
 /* upload area */
-.drop{width:340px;margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
+.drop{width:var(--col);margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
 .drop:hover,.drop.over{border-color:var(--ink);color:var(--ink)}
 .drop input{display:none}
 
 /* action row */
-.row{width:340px;margin-top:12px;display:flex;align-items:center;gap:8px}
+.row{width:var(--col);margin-top:12px;display:flex;align-items:center;gap:8px}
 .dd{position:relative}
 .ddbtn{height:40px;padding:0 12px 0 14px;border:1px solid var(--line);border-radius:10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;background:var(--bg)}
 .ddbtn:hover,.dd.open .ddbtn{border-color:var(--ink)}
@@ -111,7 +112,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
 .mi .r.ok{color:var(--ok)}
 .sep{height:1px;background:var(--line);margin:5px 4px}
-.print{margin-left:auto;height:40px;padding:0 20px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.print{margin-left:auto;height:40px;padding:0 18px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
 .print:disabled{opacity:.4;cursor:default}
 
 /* ---------- Popovers from menu bar ---------- */
@@ -151,7 +152,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 body.offline #offline{display:flex}
 body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .toast{display:none!important}
 
-@media (max-width:420px){ .paper,.drop,.row,.tools{width:100%} .menubar .mitem .t{display:none} }
+@media (max-width:500px){ .paper,.drop,.row,.tools{width:100%} .menubar .mitem .t{display:none} }
 </style>
 </head>
 <body>
