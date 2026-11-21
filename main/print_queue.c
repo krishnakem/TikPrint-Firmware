@@ -6,6 +6,9 @@
  *   the text and the image dots. The block is freed when the ticket has printed.
  * - A ticket gets its number the moment it joins the line, so numbers follow the
  *   order the tickets arrived in and never repeat.
+ * - Before each ticket the task asks "is the printer ready?" (paper in, cover closed).
+ *   If not, the queue pauses: tickets stay in line and the task asks again every few
+ *   seconds until the answer is yes. A printer that cannot answer counts as ready.
  * - Two tasks touch the queue: the web server adds tickets, the "print_queue" task
  *   takes them out. Everything they share is guarded by one lock (s_lock).
  */
@@ -28,6 +31,8 @@ static const char *TAG = "print_queue";
 #define QUEUE_MAX_IMAGE_BYTES (4 * 1024 * 1024)    // image dots held by the queue, waiting + printing (PSRAM)
 #define QUEUE_TASK_STACK      6144                 // the task logs each ticket and feeds the printer
 #define QUEUE_TASK_PRIORITY   5
+#define PAUSED_RECHECK_MS     3000                 // while the printer is not ready: ask again this often
+#define IDLE_RECHECK_MS       10000                // nothing to print: still ask this often, so the UI stays current
 
 /* One ticket in line. The text and image it points at live in the same block, right after it. */
 typedef struct {
@@ -36,6 +41,7 @@ typedef struct {
 } queued_job_t;
 
 static print_queue_print_fn s_print;
+static print_queue_ready_fn s_ready;
 static SemaphoreHandle_t s_lock;      // guards everything below
 static SemaphoreHandle_t s_wake;      // given whenever the task should look at the queue again
 static queued_job_t *s_slots[QUEUE_MAX_WAITING];   // ring of waiting tickets
@@ -43,6 +49,7 @@ static int s_head;                    // slot of the ticket that prints next
 static int s_waiting;                 // how many slots are in use
 static size_t s_image_bytes;          // image dots held right now
 static bool s_printing;               // a ticket (or the test line) is on its way to the printer
+static bool s_paused;                 // tickets are waiting because the printer is not ready
 
 /* Copy a string into the block at *at, move *at past it, and return the copy. */
 static const char *copy_text(char **at, const char *text)
@@ -134,26 +141,57 @@ static void finish(queued_job_t *q)
     free(q);
 }
 
-static void queue_task(void *arg)
+/* Note whether tickets are being held back, and log it when that changes. */
+static void set_paused(bool not_ready)
 {
-    for (;;) {
-        xSemaphoreTake(s_wake, portMAX_DELAY);   // sleep until something changes
-        queued_job_t *q;
-        while ((q = take_next()) != NULL) {
-            ESP_LOGI(TAG, "ticket #%04u starts printing", (unsigned)q->job.number);
-            if (s_print(&q->job) != ESP_OK) {
-                ESP_LOGE(TAG, "ticket #%04u failed to print", (unsigned)q->job.number);
-            }
-            finish(q);
-        }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool paused = not_ready && s_waiting > 0;
+    bool changed = paused != s_paused;
+    int waiting = s_waiting;
+    s_paused = paused;
+    xSemaphoreGive(s_lock);
+    if (changed && paused) {
+        ESP_LOGW(TAG, "queue paused: the printer is not ready, %d ticket(s) kept waiting", waiting);
+    } else if (changed) {
+        ESP_LOGI(TAG, "queue resumed");
     }
 }
 
-void print_queue_get_info(int *waiting, bool *printing)
+/* Sleep until a ticket arrives (or the printer is released), but no longer than ms. */
+static void sleep_until_woken(uint32_t ms)
+{
+    xSemaphoreTake(s_wake, pdMS_TO_TICKS(ms));
+}
+
+static void queue_task(void *arg)
+{
+    for (;;) {
+        // Asked before every ticket, and again straight after it (the loop comes back here).
+        bool ready = s_ready ? s_ready() : true;
+        set_paused(!ready);
+        if (!ready) {
+            sleep_until_woken(PAUSED_RECHECK_MS);
+            continue;
+        }
+        queued_job_t *q = take_next();
+        if (!q) {
+            sleep_until_woken(IDLE_RECHECK_MS);
+            continue;
+        }
+        ESP_LOGI(TAG, "ticket #%04u starts printing", (unsigned)q->job.number);
+        if (s_print(&q->job) != ESP_OK) {
+            ESP_LOGE(TAG, "ticket #%04u failed to print", (unsigned)q->job.number);
+        }
+        finish(q);
+    }
+}
+
+void print_queue_get_info(int *waiting, bool *printing, bool *paused)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *waiting = s_waiting;
     *printing = s_printing;
+    *paused = s_paused;
     xSemaphoreGive(s_lock);
 }
 
@@ -176,9 +214,10 @@ void print_queue_release(void)
     xSemaphoreGive(s_wake);   // tickets may have joined the line meanwhile
 }
 
-esp_err_t print_queue_init(print_queue_print_fn print_fn)
+esp_err_t print_queue_init(print_queue_print_fn print_fn, print_queue_ready_fn ready_fn)
 {
     s_print = print_fn;
+    s_ready = ready_fn;
     s_lock = xSemaphoreCreateMutex();
     s_wake = xSemaphoreCreateBinary();
     if (!s_lock || !s_wake) {

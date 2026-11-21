@@ -9,6 +9,7 @@
  *   POST /api/wifi/forget
  *   POST /api/print          put a ticket in the print queue (binary body, see print_post)
  *   GET  /api/diag/printer-test?baud=N  print one test line (optionally at another serial speed)
+ *   GET  /api/diag/printer-status       ask the printer how it is; raw answer bytes + what they mean
  *   GET  /api/last-ticket    the last ticket that started printing (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
  */
@@ -197,12 +198,21 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(root, "hostname", NET_HOSTNAME ".local");
     cJSON_AddStringToObject(root, "version", esp_app_get_description()->version);
     cJSON_AddNumberToObject(root, "ticket_count", counter_get());
-    int waiting;
-    bool printing;
-    printer_queue_info(&waiting, &printing);
+    int waiting, checked_s_ago;
+    bool printing, paused;
+    printer_queue_info(&waiting, &printing, &paused);
     cJSON *queue = cJSON_AddObjectToObject(root, "print_queue");
     cJSON_AddNumberToObject(queue, "waiting", waiting);    // tickets in line, not counting the one printing
     cJSON_AddBoolToObject(queue, "printing", printing);
+    cJSON_AddBoolToObject(queue, "paused", paused);        // held back until there is paper / the cover is closed
+    // "unknown" = the printer doesn't answer (no status wire, or it is off). Tickets still print then.
+    cJSON *prn = cJSON_AddObjectToObject(root, "printer");
+    cJSON_AddStringToObject(prn, "status", printer_status_name(printer_get_status(&checked_s_ago)));
+    if (checked_s_ago >= 0) {
+        cJSON_AddNumberToObject(prn, "last_checked_s_ago", checked_s_ago);
+    } else {
+        cJSON_AddNullToObject(prn, "last_checked_s_ago");
+    }
     add_clock_status(root);
     cJSON_AddNumberToObject(root, "free_heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
@@ -323,6 +333,7 @@ static esp_err_t diag_printer_test_get(httpd_req_t *req)
     int b = atoi(baud);
     int p = pin[0] ? atoi(pin) : -1;
     // Pins that are safe to drive on this board: not USB, not the log port, not flash/PSRAM, not boot-mode pins.
+    // (The pin that listens to the printer is refused further down, by the driver.)
     bool pin_ok = p == -1 || (p >= 1 && p <= 18 && p != 3) || p == 21 || (p >= 38 && p <= 42) || p == 47 || p == 48;
     cJSON *root = cJSON_CreateObject();
     if (b != 0 && (b < 1200 || b > 921600)) {
@@ -335,9 +346,65 @@ static esp_err_t diag_printer_test_get(httpd_req_t *req)
         esp_err_t err = printer_test(b, p, inv[0] ? atoi(inv) != 0 : -1);
         cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
         if (err != ESP_OK) {
-            cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer" : "busy");
+            cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer"
+                                                   : err == ESP_ERR_INVALID_ARG ? "bad_pin" : "busy");
         }
     }
+    return send_json(req, root);
+}
+
+/* ---------- GET /api/diag/printer-status ----------
+ * Troubleshooting aid for the status wire: asks the printer its four status questions
+ * (ESC/POS "DLE EOT 1..4") and shows each raw answer byte next to what it means.
+ *   {"ok":true,"answered":4,"status":"ok",
+ *    "queries":[{"query":"DLE EOT 1","about":"printer","raw":"0x16","valid":true}, ...],
+ *    "decoded":{"online":true,"cover_open":false,"paper_out":false,"paper_low":false,
+ *               "cutter_error":false,"other_error":false}}
+ * "raw" is null when no byte came back. "valid" is false for a byte that cannot be a status
+ * byte (noise). With no valid answer at all, "status" is "unknown" and "decoded" is null. */
+static esp_err_t diag_printer_status_get(httpd_req_t *req)
+{
+    static const char *const ABOUT[PRINTER_STATUS_QUERIES] = { "printer", "offline cause", "error cause", "paper sensor" };
+    printer_status_report_t r;
+    esp_err_t err = printer_read_status(&r);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
+    if (err != ESP_OK) {
+        cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer" : "busy");
+        cJSON_AddStringToObject(root, "message", err == ESP_ERR_NOT_SUPPORTED ? "The fake printer is in use"
+                                                 : "A ticket is being sent, try again when it has finished");
+        return send_json(req, root);
+    }
+    cJSON_AddNumberToObject(root, "answered", r.answered);
+    cJSON_AddStringToObject(root, "status", printer_status_name(r.status));
+    cJSON *queries = cJSON_AddArrayToObject(root, "queries");
+    for (int i = 0; i < PRINTER_STATUS_QUERIES; i++) {
+        char text[16];
+        cJSON *q = cJSON_CreateObject();
+        snprintf(text, sizeof(text), "DLE EOT %d", i + 1);
+        cJSON_AddStringToObject(q, "query", text);
+        cJSON_AddStringToObject(q, "about", ABOUT[i]);
+        if (r.raw[i] >= 0) {
+            snprintf(text, sizeof(text), "0x%02X", (unsigned)r.raw[i]);
+            cJSON_AddStringToObject(q, "raw", text);
+        } else {
+            cJSON_AddNullToObject(q, "raw");
+        }
+        cJSON_AddBoolToObject(q, "valid", r.valid[i]);
+        cJSON_AddItemToArray(queries, q);
+    }
+    if (r.answered == 0) {
+        cJSON_AddNullToObject(root, "decoded");
+        cJSON_AddStringToObject(root, "message", "No answer from the printer: check the status wire and that the printer is on");
+        return send_json(req, root);
+    }
+    cJSON *d = cJSON_AddObjectToObject(root, "decoded");
+    cJSON_AddBoolToObject(d, "online", r.online);
+    cJSON_AddBoolToObject(d, "cover_open", r.cover_open);
+    cJSON_AddBoolToObject(d, "paper_out", r.paper_out);
+    cJSON_AddBoolToObject(d, "paper_low", r.paper_low);
+    cJSON_AddBoolToObject(d, "cutter_error", r.cutter_error);
+    cJSON_AddBoolToObject(d, "other_error", r.other_error);
     return send_json(req, root);
 }
 
@@ -518,6 +585,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/time",         .method = HTTP_POST, .handler = time_post },
         { .uri = "/api/diag/ping",    .method = HTTP_GET,  .handler = diag_ping_get },
         { .uri = "/api/diag/printer-test", .method = HTTP_GET, .handler = diag_printer_test_get },
+        { .uri = "/api/diag/printer-status", .method = HTTP_GET, .handler = diag_printer_status_get },
         { .uri = "/api/wifi/scan",    .method = HTTP_GET,  .handler = wifi_scan_get },
         { .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = wifi_connect_post },
         { .uri = "/api/wifi/forget",  .method = HTTP_POST, .handler = wifi_forget_post },
