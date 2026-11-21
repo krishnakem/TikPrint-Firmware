@@ -264,6 +264,10 @@ static void add_automations(cJSON *root)
     cJSON_AddStringToObject(weather, "zip", zip);
     cJSON_AddStringToObject(weather, "place", place);
     cJSON_AddBoolToObject(weather, "busy", w.busy);
+    // Looking up the ZIP code's town: "locating" = still trying, "locate_error" = why the last try failed ("" = it has not).
+    cJSON_AddBoolToObject(weather, "locating", w.locating);
+    cJSON_AddStringToObject(weather, "locate_error", w.locate_error);
+    cJSON_AddStringToObject(weather, "locate_message", w.locate_message);
     if (!w.ran) {
         cJSON_AddNullToObject(weather, "last");
         return;

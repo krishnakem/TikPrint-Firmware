@@ -116,11 +116,19 @@ static void automations_task(void *arg)
             locate_tries_left = LOCATE_RETRIES;   // the ZIP code just changed: start afresh
         }
         weather_result_t res = weather_locate();
-        if (res == WEATHER_OK || res == WEATHER_NO_ZIP) {
-            locate_tries_left = 0;
+        bool done = res == WEATHER_OK || res == WEATHER_NO_ZIP;
+        if (done || res == WEATHER_REFUSED) {
+            locate_tries_left = 0;   // found, nothing to find, or refused (asking again would not help)
         } else {
             locate_tries_left--;
-            ESP_LOGW(TAG, "could not look up the ZIP code's town yet (%s): %d more tries", weather_result_name(res),
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_weather.locating = locate_tries_left > 0;
+        strlcpy(s_weather.locate_error, done ? "" : weather_result_name(res), sizeof(s_weather.locate_error));
+        strlcpy(s_weather.locate_message, done ? "" : weather_result_message(res), sizeof(s_weather.locate_message));
+        xSemaphoreGive(s_lock);
+        if (!done) {
+            ESP_LOGW(TAG, "could not look up the ZIP code's town (%s): %d more tries", weather_result_name(res),
                      locate_tries_left);
         }
     }
@@ -148,7 +156,11 @@ esp_err_t automations_weather_print_now(weather_kind_t kind)
 void automations_weather_zip_changed(void)
 {
     job_t job = { .type = JOB_WEATHER_LOCATE };
-    xQueueSend(s_jobs, &job, 0);   // if the mailbox is full, the place is looked up with the next print instead
+    bool sent = xQueueSend(s_jobs, &job, 0) == pdTRUE;   // if the mailbox is full, the place is looked up with the next print instead
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_weather.locating = sent;   // so the page can say "finding..." from this very moment
+    s_weather.locate_error[0] = s_weather.locate_message[0] = 0;
+    xSemaphoreGive(s_lock);
 }
 
 void automations_get_weather_status(automations_weather_status_t *out)
@@ -167,6 +179,7 @@ esp_err_t automations_start(void)
     if (!s_lock || !s_jobs) {
         return ESP_ERR_NO_MEM;
     }
+    s_weather.locating = true;   // the task's first job is to look up a saved ZIP code's town
     if (xTaskCreate(automations_task, "automations", TASK_STACK, NULL, TASK_PRIORITY, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

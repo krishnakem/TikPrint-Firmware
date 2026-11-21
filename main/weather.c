@@ -234,6 +234,12 @@ static void point_save(const point_t *p)
     nvs_close(h);
 }
 
+/* What to call a request that did not give a 200. */
+static weather_result_t failure(int status)
+{
+    return status == 403 ? WEATHER_REFUSED : WEATHER_UNREACHABLE;
+}
+
 static bool point_known(const char *zip)
 {
     return s_point.forecast_url[0] && strcmp(s_point.zip, zip) == 0;   // only this task changes s_point: no lock to read
@@ -245,8 +251,9 @@ static weather_result_t point_fetch(const char *zip, const char *spot)
     char url[URL_MAX], *json;
     int max_age_s;
     snprintf(url, sizeof(url), NWS_HOST "/points/%s", spot);
-    if (nws_get(url, POINT_MAX_BYTES, &json, &max_age_s) != 200) {
-        return WEATHER_UNREACHABLE;
+    int status = nws_get(url, POINT_MAX_BYTES, &json, &max_age_s);
+    if (status != 200) {
+        return failure(status);
     }
     cJSON *root = cJSON_Parse(json);
     free(json);
@@ -358,8 +365,8 @@ weather_result_t weather_make_ticket(weather_kind_t kind, bool spread_load, char
                        FORECAST_KEEP_MIN_S, FORECAST_KEEP_MAX_S);
             break;
         }
-        if (status < 0 || point_is_new || attempt > 0) {
-            return WEATHER_UNREACHABLE;
+        if (status < 0 || status == 403 || point_is_new || attempt > 0) {
+            return failure(status);
         }
         ESP_LOGW(TAG, "the saved forecast address failed: looking it up again");
         weather_result_t res = point_fetch(zip, spot);
@@ -427,6 +434,7 @@ const char *weather_result_name(weather_result_t result)
     case WEATHER_NO_ZIP:      return "no_zip";
     case WEATHER_NO_WIFI:     return "no_wifi";
     case WEATHER_UNREACHABLE: return "unreachable";
+    case WEATHER_REFUSED:     return "refused";
     default:                  return "bad_answer";
     }
 }
@@ -438,6 +446,7 @@ const char *weather_result_message(weather_result_t result)
     case WEATHER_NO_ZIP:      return "Set a ZIP code for the weather first";
     case WEATHER_NO_WIFI:     return "The printer is not on Wi-Fi, so it cannot get the weather";
     case WEATHER_UNREACHABLE: return "The National Weather Service did not answer. Try again in a minute";
+    case WEATHER_REFUSED:     return "The National Weather Service refused the request (403)";
     default:                  return "The National Weather Service sent a forecast the printer could not read";
     }
 }
