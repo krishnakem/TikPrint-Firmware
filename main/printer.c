@@ -159,7 +159,7 @@ esp_err_t printer_test(int baud, int pin, int invert)
     return err;
 }
 
-esp_err_t printer_speed_test(printer_speed_report_t *out)
+esp_err_t printer_pace_test(const printer_pace_test_t *test)
 {
     if (s_driver != &printer_thermal_driver) {
         return ESP_ERR_NOT_SUPPORTED;
@@ -167,7 +167,7 @@ esp_err_t printer_speed_test(printer_speed_report_t *out)
     if (!print_queue_claim()) {
         return ESP_ERR_INVALID_STATE;   // a ticket is printing or waiting
     }
-    esp_err_t err = printer_thermal_speed_test(out);
+    esp_err_t err = printer_thermal_pace_test(test);
     print_queue_release();
     return err;
 }

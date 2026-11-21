@@ -124,7 +124,7 @@ curl http://tikprint.local/api/last-ticket          # the last ticket that start
 open http://tikprint.local/api/last-ticket.pbm      # its image, exactly as the printer got it
 curl "http://tikprint.local/api/diag/ping?ip=1.1.1.1"   # make the board ping something (troubleshooting)
 curl http://tikprint.local/api/diag/printer-status            # ask the printer how it is: raw answer bytes + meaning (see Printer status)
-curl http://tikprint.local/api/diag/printer-speed             # print a 4 cm test strip and time how fast light and dark rows print
+curl "http://tikprint.local/api/diag/printer-pace"            # print a strip comparing ways of sending a dark image (see api.c)
 curl "http://tikprint.local/api/diag/printer-test"            # print one test line ("busy" while tickets are printing or waiting)
 curl "http://tikprint.local/api/diag/printer-test?baud=19200" # same, at another serial speed (until reboot)
                                                               # also: pin=N (board pin), invert=1 (flip the signal)
