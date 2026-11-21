@@ -329,10 +329,10 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       <div class="menu">
-        <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r ok">Today</span></button>
-        <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Connect</span></button>
-        <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Connect</span></button>
-        <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r ok">Ann Arbor</span></button>
+        <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
+        <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
+        <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
+        <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r ok" id="connWx">Print</span></button>
         <div class="sep"></div>
         <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
       </div>
@@ -1161,14 +1161,30 @@ document.addEventListener('paste',e=>{
 $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
 
 /* ---------- Connectors ---------- */
-const FILL={
-  todoist:{src:'TODOIST · TODAY',title:'Today',body:'☐ Finish BA 200 reading\n☐ Email the TA\n☐ Gym 6pm\n☐ Order printer paper'},
-  weather:{src:'WEATHER · ANN ARBOR',title:'34° · Light snow',body:'High 38°  Low 27°\nBring a jacket.'},
-};
+/* Weather prints the real forecast: the board fetches it from the National Weather Service and
+   prints it itself (nothing is put on the ticket here). The other connectors are not built yet. */
+let weatherBusy=false;
+async function printWeather(){
+  if(weatherBusy)return;
+  if(!zip){toast('Type your ZIP code in Settings › Location first');return}
+  weatherBusy=true;
+  try{
+    let r=null; try{r=await api('/api/automations/weather/print-now',{kind:'today'})}catch(e){}
+    if(!r||!r.ok){toast((r&&r.message)||'Couldn’t reach the printer');return}
+    toast('Getting the weather…');
+    // The board answers at once and fetches in the background: wait until it says how it went.
+    for(let i=0;i<40;i++){
+      await new Promise(done=>setTimeout(done,1000));
+      let s=null; try{s=await api('/api/status',undefined,2500)}catch(e){}
+      const w=s&&s.automations&&s.automations.weather;
+      if(w&&!w.busy&&w.last){toast(w.last.ok?'Printing the weather':w.last.message);return}
+    }
+    toast('The weather is taking a long time. Check the Wi-Fi');
+  }finally{weatherBusy=false}
+}
 document.querySelector('#conn .menu').addEventListener('click',e=>{
   const b=e.target.closest('.mi'); if(!b)return; const c=b.dataset.c; closeAll(null);
-  if(FILL[c]){const f=FILL[c];setDoc(titleLine(esc(f.title))+f.body.split('\n').map(l=>`<div>${esc(l)||'<br>'}</div>`).join(''));$('srcName').textContent=f.src;$('pSrc').classList.add('on')}
-  else toast(c==='add'?'Paste an API token to add a connector':'Paste your token in Settings to connect');
+  if(c==='weather')printWeather(); else toast('Coming soon');
 });
 $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 
