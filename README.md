@@ -213,8 +213,10 @@ With the yellow wire connected, the board can ask the printer how it is
   `/api/status` then shows `"print_queue": {"waiting": 2, "printing": false, "paused": true}`.
 - No answer never stops a ticket. With no yellow wire the firmware behaves as it did before.
 - `/api/status` reports `"printer": {"status": "ok", "last_checked_s_ago": 3}`.
-- In the UI a small dot appears in the menu bar while there is a problem ("Out of paper",
-  "Cover open", "Paper running low", ...), with a short toast when it starts.
+- In the UI the menu bar has a "Printer" dot: green = ready, hollow = no answer, amber or red =
+  a problem. While there is a problem, a quiet note under the Print button says what it is, what
+  to do and how many tickets are waiting ("Out of paper · 2 tickets waiting"). Print still works
+  then: the ticket joins the line. The wording is in `PRINTER_PROBLEMS` in `web/index.html`.
 - A ticket that was already being sent when the paper ran out is not sent again.
 - To check the wire, use the diagnostic endpoint (it answers "busy" while a ticket is being sent):
 

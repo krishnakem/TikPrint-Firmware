@@ -36,7 +36,6 @@ button{cursor:pointer;background:none;border:0;padding:0}
 .led{width:7px;height:7px;border-radius:50%;background:var(--ok)}
 .led.off{background:none;border:1.5px solid var(--muted)}
 .led.warn{background:var(--warn)} .led.bad{background:var(--bad)}
-.mitem[hidden]{display:none}
 
 /* ---------- Main ---------- */
 main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;padding:96px 20px 80px}
@@ -116,6 +115,11 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .sep{height:1px;background:var(--line);margin:5px 4px}
 .print{margin-left:auto;height:40px;padding:0 18px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
 .print:disabled{opacity:.4;cursor:default}
+/* Quiet note under the Print button, only while the printer has a problem */
+.pnote{width:var(--col);margin-top:14px;text-align:center;font-size:13px;color:var(--muted);line-height:1.5}
+.pnote[hidden]{display:none}
+.pnote b{color:var(--ink);font-weight:600}
+.pnote .led{display:inline-block;margin-right:7px;vertical-align:1px}
 
 /* ---------- Popovers from menu bar ---------- */
 .pop{position:fixed;top:56px;right:20px;z-index:11;width:300px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.14);display:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
@@ -154,7 +158,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 body.offline #offline{display:flex}
 body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .toast{display:none!important}
 
-@media (max-width:500px){ .paper,.drop,.row,.tools{width:100%} .menubar .mitem .t{display:none} }
+@media (max-width:500px){ .paper,.drop,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
 </style>
 </head>
 <body>
@@ -167,8 +171,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     TikPrint
   </div>
   <span class="mitem" id="usbItem" title="USB-C"><span class="led off" id="usbLed"></span><span class="t">USB-C</span></span>
-  <!-- Only shown while the printer reports a problem (out of paper, cover open, ...) -->
-  <span class="mitem" id="prnItem" role="status" hidden><span class="led bad" id="prnLed"></span><span class="t" id="prnLabel"></span></span>
+  <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
   <button class="mitem" id="wifiBtn"><span class="led off" id="wifiLed"></span><span class="t" id="wifiLabel">Set up Wi-Fi</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
@@ -247,6 +250,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     </div>
     <button class="print" id="printBtn">Print</button>
   </div>
+  <div class="pnote" id="prnNote" role="status" aria-live="polite" hidden><span class="led" id="prnNoteLed"></span><b id="prnWhat"></b><span id="prnHeld"></span><br><span id="prnHint"></span></div>
 </main>
 
 <!-- Shown when the board stops answering (cable unplugged, power off, Wi-Fi lost) -->
@@ -387,24 +391,29 @@ function showClock(t){
 setInterval(()=>{if(!offline)sendTime()},TIME_SEND_MS);
 
 /* ---------- Printer status ---------- */
-/* The board asks the printer how it is every few seconds (needs the status wire; without it the
-   status is "unknown" and nothing is shown). A problem shows as a small dot in the menu bar,
-   plus one toast when it starts. "bad" problems hold tickets in the queue until they are fixed. */
+/* The board asks the printer how it is every few seconds (this needs the status wire).
+   - Menu bar: the "Printer" dot is green when all is well, hollow when the printer doesn't
+     answer (no status wire, or it is off), amber or red while there is a problem.
+   - Under the Print button: a quiet note, only while there is a problem, saying what it is,
+     what to do, and how many tickets are waiting for it.
+   "holds" problems keep tickets in the queue until they are fixed; Print still works and adds to the line. */
 const PRINTER_PROBLEMS={
-  out_of_paper:{text:'Out of paper',bad:true},
-  cover_open:{text:'Cover open',bad:true},
-  error:{text:'Printer error',bad:true},
-  offline:{text:'Printer offline',bad:false},
-  paper_low:{text:'Paper running low',bad:false},
+  out_of_paper:{text:'Out of paper',hint:'Load a new roll',holds:true},
+  cover_open:{text:'Cover open',hint:'Close the cover',holds:true},
+  error:{text:'Printer error',hint:'Check the cutter, then switch the printer off and on',led:'bad'},
+  offline:{text:'Printer offline',hint:'Check the printer',led:'warn'},
+  paper_low:{text:'Paper running low',hint:'Have a new roll ready',led:'warn'},
 };
-let printerStatus='';
+const PRINTER_QUIET={ok:{led:'',title:'Printer ready'}, unknown:{led:'off',title:'Printer status unknown: it doesn’t answer'}};
 function showPrinter(p,q){
-  const was=printerStatus, x=PRINTER_PROBLEMS[p.status]; printerStatus=p.status;
-  $('prnItem').hidden=!x; if(!x)return;
-  const held=q&&q.paused?` · ${q.waiting} waiting`:'';
-  $('prnLabel').textContent=x.text+held; $('prnItem').title=x.text+(held?'. Tickets print when this is fixed.':'');
-  $('prnLed').className='led '+(x.bad?'bad':'warn');
-  if(was!==p.status)toast(x.text);
+  const x=PRINTER_PROBLEMS[p.status], quiet=PRINTER_QUIET[p.status]||PRINTER_QUIET.unknown, led=x?(x.led||'bad'):quiet.led;
+  $('prnLed').className='led '+led; $('prnItem').title=x?x.text:quiet.title;
+  $('prnNote').hidden=!x; if(!x)return;
+  const n=q?q.waiting:0, held=x.holds&&n;
+  $('prnNoteLed').className='led '+led;
+  $('prnWhat').textContent=x.text;
+  $('prnHeld').textContent=held?` · ${n} ticket${n>1?'s':''} waiting`:'';
+  $('prnHint').textContent=x.hint+(x.holds?(held?(n>1?' and they print by themselves':' and it prints by itself'):' to print'):'');
 }
 
 /* ---------- Status (menu bar, ticket number, settings) ---------- */
