@@ -11,7 +11,7 @@
  *   POST /api/print          put a ticket in the print queue (binary body, see print_post)
  *   GET  /api/diag/printer-test?baud=N  print one test line (optionally at another serial speed)
  *   GET  /api/diag/printer-status       ask the printer how it is; raw answer bytes + what they mean
- *   GET  /api/diag/printer-speed        print a short test strip and time how fast light and dark rows print
+ *   GET  /api/diag/printer-pace         print a strip comparing ways of sending a dark image (see diag_printer_pace_get)
  *   GET  /api/last-ticket    the last ticket that started printing (JSON)
  *   GET  /api/last-ticket.pbm  its image as a PBM file (opens in Preview)
  *   POST /api/update/check   ask GitHub whether there is newer firmware (the answer shows up in /api/status)
@@ -549,44 +549,63 @@ static esp_err_t diag_printer_status_get(httpd_req_t *req)
     return send_json(req, root);
 }
 
-/* ---------- GET /api/diag/printer-speed ----------
- * Troubleshooting aid: prints a strip of five blocks (0, 25, 50, 75, 100 % black) and times each.
- * Uses about 4 cm of paper and needs the status wire.
- *   {"ok":true,"answers":true,"rows":48,"wire_ms_per_row":6.25,
- *    "samples":[{"black_percent":50,"send_ms":310,"total_ms":520,"ms_per_row":10.8}, ...],
- *    "xoff":0,"xon":0}
- * "ms_per_row" above "wire_ms_per_row" means the printer prints that kind of row more slowly
- * than the board sends it. "answers": false means the printer does not answer the question
- * the test relies on, so nothing could be measured. "total_ms": null = no answer for that block. */
-static esp_err_t diag_printer_speed_get(httpd_req_t *req)
+/* ---------- GET /api/diag/printer-pace?bands=64,1,1&us=0,0,60&rows=80&black=100 ----------
+ * Troubleshooting aid for dark images that come out squashed. Prints one strip with the same
+ * block several times, each sent a different way, labelled A, B, C...:
+ *   bands  rows per command for each block        (default 64,1,1,1,1,8)
+ *   us     pause per black dot for each block, us (default 0,0,30,60,120,60)
+ *   rows   height of every block                  (default 80 = 1 cm)
+ *   black  how black the blocks are, in percent   (default 100)
+ * All blocks should be the same height on paper. The settings of the first one that is
+ * full height go into BAND_ROWS and PACE_US_PER_DOT in printer_thermal.c. */
+static int parse_int_list(const char *text, int *out, int max)
 {
-    printer_speed_report_t r;
-    esp_err_t err = printer_speed_test(&r);
+    int n = 0;
+    while (*text && n < max) {
+        char *end;
+        long v = strtol(text, &end, 10);
+        if (end == text) {
+            break;
+        }
+        out[n++] = (int)v;
+        text = *end == ',' ? end + 1 : end;
+    }
+    return n;
+}
+
+static esp_err_t diag_printer_pace_get(httpd_req_t *req)
+{
+    char query[160] = "", bands[48] = "64,1,1,1,1,8", us[64] = "0,0,30,60,120,60", rows[8] = "80", black[8] = "100";
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    httpd_query_key_value(query, "bands", bands, sizeof(bands));
+    httpd_query_key_value(query, "us", us, sizeof(us));
+    httpd_query_key_value(query, "rows", rows, sizeof(rows));
+    httpd_query_key_value(query, "black", black, sizeof(black));
+
+    printer_pace_test_t t = { .rows = atoi(rows), .black_percent = atoi(black) };
+    int nb = parse_int_list(bands, t.band_rows, PRINTER_PACE_VARIANTS);
+    int nu = parse_int_list(us, t.us_per_dot, PRINTER_PACE_VARIANTS);
+    t.count = nb < nu ? nb : nu;
+
+    esp_err_t err = t.count > 0 ? printer_pace_test(&t) : ESP_ERR_INVALID_ARG;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
     if (err != ESP_OK) {
-        cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer" : "busy");
+        cJSON_AddStringToObject(root, "error", err == ESP_ERR_NOT_SUPPORTED ? "no_printer"
+                                               : err == ESP_ERR_INVALID_STATE ? "busy" : "bad_settings");
         return send_json(req, root);
     }
-    cJSON_AddBoolToObject(root, "answers", r.answers);
-    cJSON_AddNumberToObject(root, "first_answer", r.first_answer);
-    cJSON_AddNumberToObject(root, "rows", r.rows);
-    cJSON_AddNumberToObject(root, "wire_ms_per_row", 6.25);
-    cJSON *samples = cJSON_AddArrayToObject(root, "samples");
-    for (int i = 0; r.answers && i < PRINTER_SPEED_SAMPLES; i++) {
+    cJSON *blocks = cJSON_AddArrayToObject(root, "blocks");
+    for (int i = 0; i < t.count; i++) {
+        char name[2] = { (char)('A' + i), 0 };
         cJSON *one = cJSON_CreateObject();
-        cJSON_AddNumberToObject(one, "black_percent", r.black_percent[i]);
-        cJSON_AddNumberToObject(one, "send_ms", r.send_ms[i]);
-        if (r.total_ms[i] >= 0) {
-            cJSON_AddNumberToObject(one, "total_ms", r.total_ms[i]);
-            cJSON_AddNumberToObject(one, "ms_per_row", (double)(r.total_ms[i] * 10 / r.rows) / 10);
-        } else {
-            cJSON_AddNullToObject(one, "total_ms");
-        }
-        cJSON_AddItemToArray(samples, one);
+        cJSON_AddStringToObject(one, "block", name);
+        cJSON_AddNumberToObject(one, "rows_per_command", t.band_rows[i]);
+        cJSON_AddNumberToObject(one, "us_per_dot", t.us_per_dot[i]);
+        cJSON_AddItemToArray(blocks, one);
     }
-    cJSON_AddNumberToObject(root, "xoff", r.xoff);
-    cJSON_AddNumberToObject(root, "xon", r.xon);
+    cJSON_AddNumberToObject(root, "rows", t.rows);
+    cJSON_AddNumberToObject(root, "black_percent", t.black_percent);
     return send_json(req, root);
 }
 
@@ -987,7 +1006,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/diag/ping",    .method = HTTP_GET,  .handler = diag_ping_get },
         { .uri = "/api/diag/printer-test", .method = HTTP_GET, .handler = diag_printer_test_get },
         { .uri = "/api/diag/printer-status", .method = HTTP_GET, .handler = diag_printer_status_get },
-        { .uri = "/api/diag/printer-speed", .method = HTTP_GET, .handler = diag_printer_speed_get },
+        { .uri = "/api/diag/printer-pace", .method = HTTP_GET, .handler = diag_printer_pace_get },
         { .uri = "/api/wifi/scan",    .method = HTTP_GET,  .handler = wifi_scan_get },
         { .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = wifi_connect_post },
         { .uri = "/api/wifi/forget",  .method = HTTP_POST, .handler = wifi_forget_post },
