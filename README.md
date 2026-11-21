@@ -113,7 +113,9 @@ Two things set it again:
   `"time": {"set": true, "source": "browser", "now": "2026-11-20T22:05:31-05:00", "timezone": "America/Detroit", "last_sync_s_ago": 12}`.
   `source` is `browser`, `internet` or `none`. While not set, `now` and `last_sync_s_ago` are `null`.
 - In the UI the board's time is in Settings (the gear), e.g. `22:05 · Detroit`.
-- If the clock is set, the ticket's head line carries the print time (`#0042   NOV 20, 10:05 PM`).
+- If the clock is set, the ticket's head line carries the time (`#0042   NOV 20, 10:05 PM`). It is
+  the board's time in the board's timezone, never the computer's. The page draws it when Print is
+  pressed, so a ticket that waits in the queue shows when it was sent, not when it came out.
   To switch that off: `HEAD_SHOW_TIME` in `web/index.html` (tickets drawn by the page) and
   `TICKET_SHOW_TIME` in `main/printer_thermal.c` (tickets in the printer's built-in font).
 - The timings are named constants at the top of `main/clock.c` and of the "Clock" code in `web/index.html`.
