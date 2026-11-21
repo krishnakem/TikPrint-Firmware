@@ -857,8 +857,6 @@ const DOC_SHARE=.9;     // if 90% of pixels are nearly black or nearly white, tr
 const DOC_CUT=150;      // document: darker than this becomes a black dot (above 128 keeps thin strokes)
 const SHARPEN=.6;       // edge boost before turning greys into dots (0 = off)
 const PHOTO_GAMMA=.8;   // photo: below 1 brightens mid-greys, because thermal dots spread and print darker
-const INK_MAX=.5;       // most black allowed in any patch of a picture (0-1). Above about half, this printer squashes the picture (see capInk)
-const INK_BOX=16;       // size of that patch, in dots (2 mm)
 const PDF_PAGES=300;    // most pages of a PDF we will read
 const DOTS_PER_MM=8;    // 203 dots per inch
 let imgBits=null;       // the dots on the ticket right now: {height, data: Uint8Array of 72 bytes per row, 1 = black}
@@ -931,30 +929,6 @@ function rasterize(c){
         if(y+1<h){ if(back)v[i+PW-d]+=err*3/16; v[i+PW]+=err*5/16; if(fwd)v[i+PW+d]+=err/16; }
       }
     }
-  }
-  return capInk({height:h,data:out});
-}
-/* Thin out large dark areas.
-   This printer cannot print big areas of solid black: the hot paper sticks to the print head and does
-   not move on a full step, so the picture comes out squashed, with white hairlines. Tests on the
-   printer showed areas up to half black print true to size, and darker ones do not.
-   So wherever a patch of the picture (INK_BOX dots across) is more than INK_MAX black, dots are taken
-   out in an even pattern until it is INK_MAX black. On paper a half-black pattern still reads as a
-   dark, even tone, because the dots spread. Edges stay solid for a few dots, so shapes keep a crisp
-   outline; thin lines and text inside pictures are never a large dark area, so they are untouched.
-   Text typed on the ticket does not go through here at all. */
-const INK_ORDER=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];   // 4x4 pattern: which dots go first ("Bayer" order)
-function capInk(b){
-  const h=b.height, bw=PW/8, W1=PW+1, data=b.data, sum=new Uint32Array(W1*(h+1));
-  const at=(x,y)=>data[y*bw+(x>>3)]>>(7-(x&7))&1;
-  // sum[(y+1)*W1+x+1] = black dots above and to the left of (x,y), so any patch can be counted in one step
-  for(let y=0;y<h;y++)for(let x=0;x<PW;x++)sum[(y+1)*W1+x+1]=at(x,y)+sum[y*W1+x+1]+sum[(y+1)*W1+x]-sum[y*W1+x];
-  const out=data.slice(), r=INK_BOX/2;
-  for(let y=0;y<h;y++)for(let x=0;x<PW;x++){
-    if(!at(x,y))continue;
-    const x0=Math.max(0,x-r), x1=Math.min(PW,x+r), y0=Math.max(0,y-r), y1=Math.min(h,y+r);
-    const share=(sum[y1*W1+x1]-sum[y0*W1+x1]-sum[y1*W1+x0]+sum[y0*W1+x0])/((x1-x0)*(y1-y0));
-    if(share>INK_MAX&&(INK_ORDER[(y&3)*4+(x&3)]+.5)/16<1-INK_MAX/share)out[y*bw+(x>>3)]&=~(0x80>>(x&7));
   }
   return {height:h,data:out};
 }
