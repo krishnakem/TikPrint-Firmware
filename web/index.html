@@ -60,7 +60,9 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .p-head{display:flex;justify-content:space-between;gap:10px;font:700 10px "Inter",Helvetica,Arial,sans-serif;letter-spacing:.03em;color:#999;white-space:nowrap;margin:-4px -6px 0;padding:4px 6px;border-radius:5px;cursor:pointer;outline:none;transition:background .12s,color .12s}
 .p-head:hover{color:#666}
 /* The header is "selected" (click it): the toolbar's font menu then changes the header's font */
-.p-head.sel{background:rgba(60,120,255,.16);color:#333}
+.p-head.sel{background:rgba(0,0,0,.07);color:#333}
+/* ...and no text cursor blinks in the ticket meanwhile: the toolbar is working on the header, not on the text */
+.paper.hdrsel #doc{caret-color:transparent}
 .p-head span:first-child{overflow:hidden;text-overflow:ellipsis}
 /* The text you type. #doc is laid out at the paper's real size (576 px = 576 printer dots) and
    shrunk to fit the ticket on screen, so lines break exactly where they will on paper. */
@@ -82,6 +84,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .tools .sep{width:1px;height:18px;flex:none;background:var(--line);margin:0 2px}
 /* While the ticket header is selected only the font menu applies to it: the rest of the toolbar steps back */
 .tools.hdr button,.tools.hdr #fSize{opacity:.28;pointer-events:none}
+.tools.hdr button.on{background:none;color:var(--ink)}   /* bold / alignment say nothing about the header: don't light them up */
 .p-img{position:relative;margin-top:10px;display:none}
 .p-img.on{display:block}
 /* same width as the text above it: both are 576 printer dots wide */
@@ -492,8 +495,10 @@ setInterval(()=>{if(!offline)sendTime()},TIME_SEND_MS);
 let headerSelected=false;
 function selectHeader(on){
   if(on===headerSelected)return; headerSelected=on;
-  $('pHead').classList.toggle('sel',on); $('tools').classList.toggle('hdr',on);
-  if(on){getSelection().removeAllRanges(); $('fFont').value=hdr.header_font}
+  $('pHead').classList.toggle('sel',on); $('tools').classList.toggle('hdr',on); $('paper').classList.toggle('hdrsel',on);
+  // Take the cursor out of the text for good. Without the blur, Safari keeps the text box focused and
+  // parks a stray cursor at its very top, in the wrong size, next to the "Title" hint.
+  if(on){doc.blur(); getSelection().removeAllRanges(); $('pHead').focus({preventScroll:true}); $('fFont').value=hdr.header_font}
   else showState();   // the toolbar shows the text's style again
 }
 $('pHead').onclick=()=>selectHeader(true);
