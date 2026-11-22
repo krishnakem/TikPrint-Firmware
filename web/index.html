@@ -11,6 +11,7 @@
   --card:#f4f3f0; --hover:rgba(28,28,30,.05);
   --btn:#1c1c1e; --btn-ink:#fff; --ok:#2e9d5b; --warn:#d98a1f; --bad:#d64545;
   --paper:#fff; --paper-ink:#111;
+  --pane:340px;  /* width of the Connectors pane */
   --col:440px;   /* width of the centre column: toolbar, ticket, drop box, buttons */
   --mono:ui-monospace,"SF Mono",Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
@@ -113,6 +114,15 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .p-src{display:none;margin-top:10px;font:700 10px Helvetica,Arial,sans-serif;letter-spacing:.06em;color:#999}
 .p-src.on{display:flex;justify-content:space-between}
 .p-src button{color:#999;font:inherit}
+/* A ticket the board made itself (the weather), shown while it prints: for a moment it takes the
+   place of everything on the ticket. The picture is the exact dots; text the printer sets in its
+   own font is shown in the look-alike font, sized so 48 letters fill the width as on paper. */
+.p-show{display:none;container-type:inline-size}
+.p-show canvas{display:block;width:100%}
+.p-show canvas[hidden]{display:none}
+.p-show pre{margin:0;white-space:pre-wrap;overflow-wrap:break-word;font:calc(100cqw*20/576)/1.5 "Printer",monospace;color:#111}
+.paper.show>*{display:none}
+.paper.show>.p-show{display:block;animation:pop .2s ease}
 
 /* upload area */
 .drop{width:var(--col);margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
@@ -129,14 +139,13 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
 .mi .r.ok{color:var(--ok)}
 .sep{height:1px;background:var(--line);margin:5px 4px}
-/* The Weather panel: shown in the Connectors popover in place of the list */
-#connPop [hidden]{display:none}
+/* The Weather card in the Connectors pane */
 #connPop h3{font-size:13px;font-weight:600;color:var(--muted);margin:12px 10px 6px}
 .wxhead{display:flex;align-items:center;gap:10px;padding:4px 6px 10px;font-size:14px;font-weight:600}
-.wxhead .back{color:var(--muted);font-size:20px;line-height:1;padding:0 4px}
-.wxhead .back:hover{color:var(--ink)}
 .wxhead .ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:700 11px var(--sans);color:#fff;background:#f5a623}
 .wxhead .sw{margin-left:auto}
+.wxhead .nm{display:flex;flex-direction:column;line-height:1.25}
+.wxhead small{font-size:12px;font-weight:400;color:var(--muted)}
 .wxpad{padding:10px 12px}
 .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{flex:1;padding:6px 6px;font-size:13px;color:var(--muted);white-space:nowrap}
@@ -242,6 +251,23 @@ button.kv:hover{background:var(--hover)}
 .locnote.bad{color:var(--bad)}
 .ok-state .link+.link{margin-top:6px}
 
+/* ---------- Connectors pane ---------- */
+/* Opened from the top bar, and it stays open while you work. On a wide screen it takes the right-hand
+   side and the ticket column slides over to sit centred in the room that is left. On a narrow screen
+   there is no room to share, so it lies over the page instead (full width on a phone).
+   It sits under the top bar (which stays clickable), so its own content starts below it. */
+.pane{position:fixed;top:0;right:0;bottom:0;z-index:9;width:var(--pane);display:flex;flex-direction:column;padding-top:56px;background:var(--card);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .28s cubic-bezier(.2,.8,.2,1),visibility 0s .28s}
+.pane.open{transform:none;visibility:visible;transition:transform .28s cubic-bezier(.2,.8,.2,1)}
+.pane .scroll{flex:1;overflow-y:auto;padding:4px 10px 24px}
+.panehead{display:flex;align-items:center;justify-content:space-between;padding:0 2px 10px 8px;font-size:15px;font-weight:600}
+.panehead button{width:32px;height:32px;border-radius:8px;color:var(--muted);font-size:14px}
+.panehead button:hover{color:var(--ink);background:var(--hover)}
+main{transition:padding-right .28s cubic-bezier(.2,.8,.2,1)}
+body.paneopen main{padding-right:calc(var(--pane) + 20px)}
+@media (max-width:860px){ body.paneopen main{padding-right:20px} .pane{box-shadow:-16px 0 40px rgba(0,0,0,.14)} }
+@media (max-width:500px){ .pane{width:100%;border-left:0} }
+@media (prefers-reduced-motion:reduce){.pane,.pane.open,main{transition:none}}
+
 .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
@@ -252,7 +278,7 @@ button.kv:hover{background:var(--hover)}
 #offline b{font-size:17px;font-weight:600;letter-spacing:-.01em}
 #offline span{color:var(--muted);font-size:14px;max-width:260px}
 body.offline #offline{display:flex}
-body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .toast{display:none!important}
+body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .pane,body.offline .toast{display:none!important}
 
 @media (max-width:500px){ .paper,.drop,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
 </style>
@@ -266,10 +292,9 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="8" width="18" height="9" rx="2.5"/><path d="M7 8V4h10v4"/><path d="M7 14h10v7l-2.5-1.3L12 21l-2.5-1.3L7 21z"/></svg>
     TikPrint
   </div>
-  <span class="mitem" id="usbItem" title="USB-C"><span class="led off" id="usbLed"></span><span class="t">USB-C</span></span>
+  <button class="mitem" id="wifiBtn"><span class="led off" id="linkLed"></span><span class="t" id="linkLabel">Connecting…</span></button>
   <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
-  <button class="mitem" id="connBtn" title="Connectors"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
-  <button class="mitem" id="wifiBtn"><span class="led off" id="wifiLed"></span><span class="t" id="wifiLabel">Set up Wi-Fi</span></button>
+  <button class="mitem" id="connBtn" title="Connectors" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
 
@@ -289,50 +314,53 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
   </div>
 </div>
 
-<!-- Connectors popover: the list, or one connector's panel in its place -->
-<div class="pop" id="connPop">
-  <div id="connList">
-    <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r" id="connWx">›</span></button>
-    <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
-    <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
-    <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
-    <div class="sep"></div>
-    <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
+<!-- Connectors pane: one card per connector. Weather is the only one that works so far. -->
+<aside class="pane" id="connPop" aria-label="Connectors">
+  <div class="scroll">
+    <div class="panehead">Connectors<button id="connClose" aria-label="Close connectors">✕</button></div>
+    <!-- Weather: print now, and when it prints by itself -->
+    <div id="wxPanel">
+      <div class="wxhead"><span class="ico">☀</span><span class="nm">Weather<small id="connWx"></small></span><input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
+      <div class="grp wxpad"><div class="wxrow">
+        <select id="wxKind" aria-label="Which forecast to print">
+          <option value="today">Today</option><option value="rest">Rest of today</option><option value="tomorrow">Tomorrow</option>
+        </select>
+        <button class="wxbtn" id="wxPrint">Print now</button>
+      </div></div>
+      <h3>Places</h3>
+      <div class="grp">
+        <div id="wxPlaceList"></div>
+        <div class="kv" id="wxAddRow"><input type="text" class="add" id="wxAdd" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Add a ZIP code or city" aria-label="Add a place: type a ZIP code or a city"></div>
+        <div class="matches" id="wxMatches"></div>
+        <div class="locnote" id="wxPlaceNote" role="status" hidden></div>
+      </div>
+      <h3>Schedule</h3>
+      <div class="grp">
+        <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
+        <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
+        <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
+        <div class="locnote">Up to 3 scheduled prints a day. <button id="wxPro">Upgrade to Pro</button> for more.</div>
+      </div>
+      <h3>Ticket look</h3>
+      <div class="grp">
+        <div class="kv"><span>Font</span>
+          <select id="wxFont" aria-label="Font of weather tickets">
+            <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Receipt</option>
+          </select></div>
+        <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
+        <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
+      </div>
+    </div>
+    <h3>Coming soon</h3>
+    <div id="connList">
+      <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
+      <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
+      <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
+      <div class="sep"></div>
+      <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
+    </div>
   </div>
-  <!-- Weather: print now, and when it prints by itself -->
-  <div id="wxPanel" hidden>
-    <div class="wxhead"><button class="back" id="wxBack" aria-label="Back to connectors">‹</button><span class="ico">☀</span>Weather<input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
-    <div class="grp wxpad"><div class="wxrow">
-      <select id="wxKind" aria-label="Which forecast to print">
-        <option value="today">Today</option><option value="rest">Rest of today</option><option value="tomorrow">Tomorrow</option>
-      </select>
-      <button class="wxbtn" id="wxPrint">Print now</button>
-    </div></div>
-    <h3>Places</h3>
-    <div class="grp">
-      <div id="wxPlaceList"></div>
-      <div class="kv" id="wxAddRow"><input type="text" class="add" id="wxAdd" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Add a ZIP code or city" aria-label="Add a place: type a ZIP code or a city"></div>
-      <div class="matches" id="wxMatches"></div>
-      <div class="locnote" id="wxPlaceNote" role="status" hidden></div>
-    </div>
-    <h3>Schedule</h3>
-    <div class="grp">
-      <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
-      <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
-      <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
-      <div class="locnote">Up to 3 scheduled prints a day. <button id="wxPro">Upgrade to Pro</button> for more.</div>
-    </div>
-    <h3>Ticket look</h3>
-    <div class="grp">
-      <div class="kv"><span>Font</span>
-        <select id="wxFont" aria-label="Font of weather tickets">
-          <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Receipt</option>
-        </select></div>
-      <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
-      <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
-    </div>
-  </div>
-</div>
+</aside>
 
 <!-- Settings popover -->
 <div class="pop" id="gearPop">
@@ -392,6 +420,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     <div class="p-head" id="pHead" tabindex="0" role="button" aria-label="Ticket header. Select it, then pick its font in the toolbar" title="Click, then pick a font in the toolbar"><span id="hLeft">TikPrint</span><span id="hRight"></span></div>
     <div class="docwrap" id="docWrap"><div id="doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Ticket text"></div></div>
     <div class="p-img" id="pImg"><canvas id="prev" width="576" height="1" role="img" aria-label="Exactly what will print"></canvas><div class="p-wait" id="pWait">Preparing…</div><div class="p-nav" id="pNav"><button id="pPrev" aria-label="Previous part">‹</button><span id="pPart"></span><button id="pNext" aria-label="Next part">›</button></div><div class="p-note" id="pNote"></div><button id="rmImg" aria-label="Remove file">✕</button></div>
+    <div class="p-show" id="pShow"><canvas id="showCv" width="576" height="1" role="img" aria-label="The ticket that is printing"></canvas><pre id="showTx"></pre></div>
     <div class="p-src" id="pSrc"><span id="srcName"></span><button id="rmSrc">clear</button></div>
   </div>
 
@@ -426,7 +455,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
   const c=document.getElementById('grid'), g=c.getContext('2d');
   const m={x:-9999,y:-9999,sx:-9999,sy:-9999,active:0};
   let base=[0,0,0],hot=[0,0,0],W=0,H=0,dpr=1; const SP=16,R=150;
-  const SOLID='.tools,.paper,.drop,.print,.pop.open,.toast.on,body.offline #offline .card';
+  const SOLID='.tools,.paper,.drop,.print,.pop.open,.pane.open,.toast.on,body.offline #offline .card';
   const hex=v=>{v=v.trim().replace('#','');return[0,2,4].map(i=>parseInt(v.slice(i,i+2),16))};
   const colors=()=>{const s=getComputedStyle(document.documentElement);base=hex(s.getPropertyValue('--dot'));hot=hex(s.getPropertyValue('--dot-hot'))};
   const size=()=>{dpr=Math.min(devicePixelRatio,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr};
@@ -712,14 +741,19 @@ function showPrinter(p,q){
 
 /* ---------- Status (menu bar, ticket number, settings) ---------- */
 let viaUsb=false, scanning=false, printing=false, updating=false;   // updating: a firmware update is under way
+/* One light in the top bar for how the printer is connected: the cable this page may be using (USB-C)
+   and the board's own Wi-Fi. Green = on Wi-Fi, so the weather and updates work. Yellow = something
+   to do: it is reached over USB-C only and Wi-Fi is not set up yet. Clicking it opens the Wi-Fi list. */
+let wifiIp='', wifiJoining=false;
+function showLink(){
+  $('linkLed').className='led'+(wifi?'':' warn');
+  $('linkLabel').textContent=!viaUsb?'Wi-Fi':wifi?'USB-C + Wi-Fi':wifiJoining?'USB-C · joining Wi-Fi…':'USB-C · set up Wi-Fi';
+  $('wifiBtn').title=(viaUsb?'This page is using the USB-C cable. ':'This page is using Wi-Fi. ')+(wifi?`Wi-Fi: ${wifi} · ${wifiIp}`:'Wi-Fi is not set up');
+}
 function applyStatus(s){
   viaUsb=s.via==='usb';
-  $('usbLed').classList.toggle('off',!viaUsb);
-  $('usbItem').title=viaUsb?'Connected over USB-C':(s.usb_connected?'USB-C is plugged into a computer':'USB-C not connected');
-  wifi=s.wifi?s.wifi.ssid:null;
-  $('wifiLed').classList.toggle('off',!s.wifi);
-  $('wifiLabel').textContent=s.wifi?'Wi-Fi':(s.wifi_connecting?'Connecting…':'Set up Wi-Fi');
-  $('wifiBtn').title=s.wifi?`${s.wifi.ssid} · ${s.wifi.ip}`:'';
+  wifi=s.wifi?s.wifi.ssid:null; wifiIp=s.wifi?s.wifi.ip:''; wifiJoining=!!s.wifi_connecting;
+  showLink();
   ticket=s.ticket_count+1; showDate();
   $('setName').textContent=s.hostname; $('setUsb').textContent=s.usb_ip;
   if(s.update)showFirmware(s); else $('setFw').textContent='v'+s.version;
@@ -774,12 +808,18 @@ addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{p
 function closeAll(except){
   if(updating)except='gearPop';     // a firmware update is running: its progress stays on screen
   if(except!=='gearPop')closeSheet();
-  ['wifiPop','gearPop','connPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
-  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('connBtn').classList.toggle('on',except==='connPop');
+  ['wifiPop','gearPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
+  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop');
 }
 $('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
-$('connBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('connPop').classList.contains('open');closeAll(o?'connPop':null);if(o)showConnView(false);$('connPop').classList.toggle('open',o)};
+/* The Connectors pane is not a popover: it stays open until its button or its ✕ is pressed. */
+function showPane(on){
+  $('connPop').classList.toggle('open',on); document.body.classList.toggle('paneopen',on);
+  $('connBtn').classList.toggle('on',on); $('connBtn').setAttribute('aria-expanded',on);
+}
+$('connBtn').onclick=()=>showPane(!$('connPop').classList.contains('open'));
+$('connClose').onclick=()=>showPane(false);
 document.addEventListener('click',e=>{if(!e.target.closest('.pop'))closeAll(null)});
 
 /* ---------- Firmware update ---------- */
@@ -975,7 +1015,7 @@ async function join(net){
   if(r.ok){
     if(inp)inp.value='';
     wifi=r.ssid;$('okName').textContent=r.ssid;$('okIp').textContent=r.ip;showList(false);
-    $('wifiLed').classList.remove('off');$('wifiLabel').textContent='Wi-Fi';
+    wifiIp=r.ip; showLink();
   }else if(r.error==='wrong_password'&&inp){inp.classList.add('bad');inp.focus();inp.select()}
   else toast(r.error==='not_found'?'Network not found':r.error==='lost'?'Lost contact with the printer':'Couldn’t join. Try again.');
   refreshStatus();
@@ -1270,21 +1310,18 @@ document.addEventListener('paste',e=>{
 $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
 
 /* ---------- Connectors ---------- */
-/* Weather is the one connector so far. Clicking it opens its panel in the Connectors popover (top bar): "Print now" for
+/* Weather is the one connector so far. Its card in the Connectors pane has: "Print now" for
    today, the rest of today or tomorrow; the places (one is selected: tickets are for it, and it is
    the header's location); the schedule (three times a day, each with a switch; the switch at the top
    is for the whole schedule); and the font and size the ticket is drawn in. The board fetches the forecast from the
-   National Weather Service and prints it itself: nothing is put on the ticket here.
+   National Weather Service and prints it itself. "Print now" then shows that ticket on the screen (see showPrinted).
    The schedule lives on the board (POST /api/automations/weather), so it runs with no page open. */
-function showConnView(weather){
-  $('connList').hidden=weather; $('wxPanel').hidden=!weather;
-}
 let wxSaving=0, weatherBusy=false, wxPlacesShown='';
 /* From /api/status ("automations": "weather"): the places, the schedule and the look. */
 function showWeatherPanel(w){
   const sch=w.schedule; if(!sch)return;
   const places=w.places||[], n=sch.slots.filter(x=>x.on).length, where=(w.place||w.zip||'').split(',')[0];
-  $('connWx').textContent=!places.length?'Set up ›':`${where} · ${sch.on&&n?n+' a day':'off'} ›`;
+  $('connWx').textContent=!places.length?'Add a place to start':`${where} · ${sch.on&&n?n+' a day':'schedule off'}`;
   // The list of places (only drawn again when it changed, so a click in it is never lost)
   const key=JSON.stringify([places,w.selected]);
   if(key!==wxPlacesShown){
@@ -1347,7 +1384,6 @@ $('wxAdd').onkeydown=async e=>{
   const town=(await findTowns(v))[0];   // Enter takes the first town suggested
   if(town)addPlace({city:town},town); else showPlaceNote(`No town called “${v}” found.`,true);
 };
-$('wxBack').onclick=()=>showConnView(false);
 $('wxPro').onclick=()=>toast('Pro isn’t available yet');
 $('wxPrint').onclick=printWeather;
 async function printWeather(){
@@ -1355,22 +1391,75 @@ async function printWeather(){
   if(!zip&&!zipCity){toast('Add a place first');return}
   weatherBusy=true; $('wxPrint').disabled=true; $('wxPrint').textContent='Getting…';
   try{
+    const t0=Date.now();
     let r=null; try{r=await api('/api/automations/weather/print-now',{kind:$('wxKind').value})}catch(e){}
     if(!r||!r.ok){toast((r&&r.message)||'Couldn’t reach the printer');return}
     // The board answers at once and fetches in the background: wait until it says how it went.
     for(let i=0;i<40;i++){
-      await new Promise(done=>setTimeout(done,1000));
+      await wait(1000);
       let s=null; try{s=await api('/api/status',undefined,2500)}catch(e){}
       const w=s&&s.automations&&s.automations.weather;
-      if(w&&!w.busy&&w.last){toast(w.last.ok?'Printing the weather':w.last.message);return}
+      // "last" may still be an earlier print: only one that finished after this press counts
+      if(!w||w.busy||!w.last||w.last.s_ago*1000>Date.now()-t0+3000)continue;
+      if(!w.last.ok){toast(w.last.message);return}
+      toast('Printing the weather');
+      const t=await lastTicket(w.last.ticket);
+      if(t)await showPrinted(t);
+      return;
     }
     toast('The weather is taking a long time. Check the Wi-Fi');
   }finally{weatherBusy=false; $('wxPrint').disabled=false; $('wxPrint').textContent='Print now'}
 }
+const wait=ms=>new Promise(done=>setTimeout(done,ms));
+/* Fetch ticket number `number` back from the board, as it was sent to the printer: its words, and
+   its picture as dots ({height,data}, like imgBits) if it has one. The board only keeps the ticket
+   that started printing last, so this waits a little for ours to reach the front of the line.
+   The picture comes as a PBM file: the line "P4", the line "<width> <height>", then 1 bit per dot.
+   Returns null if the ticket could not be had (the paper still prints). */
+async function lastTicket(number){
+  for(let i=0;i<16;i++){
+    let t=null; try{t=await api('/api/last-ticket',undefined,2500)}catch(e){}
+    if(t&&t.number>number)return null;   // a later ticket has already taken its place
+    if(t&&t.number===number){
+      t.bits=null;
+      if(t.image)try{
+        const buf=new Uint8Array(await (await fetch('/api/last-ticket.pbm',{cache:'no-store'})).arrayBuffer());
+        let at=0, lines=0; while(at<buf.length&&lines<2)if(buf[at++]===10)lines++;   // skip the two header lines
+        const h=+new TextDecoder().decode(buf.subarray(0,at)).trim().split(/\s+/)[2], len=h*PW/8;
+        if(h>0&&buf.length-at>=len)t.bits={height:h,data:buf.subarray(at,at+len)};
+      }catch(e){}
+      return t;
+    }
+    await wait(500);
+  }
+  return null;
+}
+/* Show a ticket the board printed by itself on the on-screen ticket, then let it fly off like any
+   other print. What was being typed is only hidden meanwhile: it is back on the fresh ticket. */
+async function showPrinted(t){
+  const p=$('paper');
+  if(printing||offline)return;
+  // In the printer's own font the picture is only the weather symbol and the words are printed as text;
+  // in any other font the picture is the whole ticket.
+  const words=!t.bits||$('wxFont').value==='Printer';
+  if(!t.bits&&!t.title&&!t.body)return;
+  printing=true; $('printBtn').disabled=true;
+  if(matchMedia('(max-width:860px)').matches)showPane(false);   // there the pane lies over the ticket
+  $('showCv').hidden=!t.bits; if(t.bits)showBits(t.bits,$('showCv'));
+  $('showTx').textContent=words?[t.title,t.body].filter(Boolean).join('\n'):'';
+  p.classList.add('show');
+  scrollTo({top:0,behavior:'smooth'});
+  await wait(1200);   // long enough to see what is printing
+  const away=p.getBoundingClientRect().bottom+40;
+  p.style.setProperty('--away',-away+'px'); p.style.setProperty('--feed',FEED_MS(away)+'ms'); p.classList.add('out');
+  await wait(FEED_MS(away)+60);
+  p.classList.remove('out','show'); p.classList.add('in');
+  p.addEventListener('animationend',()=>p.classList.remove('in'),{once:true});
+  printing=false; $('printBtn').disabled=false;
+}
 $('connList').addEventListener('click',e=>{
   const b=e.target.closest('.mi'); if(!b)return;
-  if(b.dataset.c==='weather')return showConnView(true);
-  closeAll(null); toast('Coming soon');
+  toast('Coming soon');
 });
 $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 
