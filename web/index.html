@@ -120,12 +120,8 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .drop input{display:none}
 
 /* action row */
-.row{width:var(--col);margin-top:12px;display:flex;align-items:center;gap:8px}
-.dd{position:relative}
-.ddbtn{height:40px;padding:0 12px 0 14px;border:1px solid var(--line);border-radius:10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;background:var(--bg)}
-.ddbtn:hover,.dd.open .ddbtn{border-color:var(--ink)}
-.menu{position:absolute;top:calc(100% + 6px);left:0;min-width:230px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.12);display:none;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);z-index:5}
-.dd.open .menu,.pop.open{display:block;animation:pop .14s ease}
+.row{width:var(--col);margin-top:12px;display:flex;align-items:center;justify-content:center;gap:8px}
+.pop.open{display:block;animation:pop .14s ease}
 @keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 .mi{width:100%;white-space:nowrap;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;font-size:14px;text-align:left}
 .mi:hover{background:var(--hover)}
@@ -133,10 +129,9 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
 .mi .r.ok{color:var(--ok)}
 .sep{height:1px;background:var(--line);margin:5px 4px}
-/* The Weather panel: shown in the Connectors menu in place of the list */
-.menu.wide{width:300px;padding:8px}
-.menu [hidden]{display:none}
-.menu h3{font-size:13px;font-weight:600;color:var(--muted);margin:12px 10px 6px}
+/* The Weather panel: shown in the Connectors popover in place of the list */
+#connPop [hidden]{display:none}
+#connPop h3{font-size:13px;font-weight:600;color:var(--muted);margin:12px 10px 6px}
 .wxhead{display:flex;align-items:center;gap:10px;padding:4px 6px 10px;font-size:14px;font-weight:600}
 .wxhead .back{color:var(--muted);font-size:20px;line-height:1;padding:0 4px}
 .wxhead .back:hover{color:var(--ink)}
@@ -150,7 +145,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .wxbtn{height:34px;padding:0 14px;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;white-space:nowrap}
 .wxrow{display:flex;gap:8px;align-items:center}
 .wxrow select{flex:1;min-width:0;height:34px}
-.menu select{background:transparent;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:13px;color:var(--ink);color-scheme:light dark}
+#connPop select{background:transparent;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:13px;color:var(--ink);color-scheme:light dark}
 .seg.sml{width:120px}
 .seg.off{opacity:.4;pointer-events:none}
 /* Places: a list to pick from, a box to add one, and towns suggested while typing (also under Settings > Location) */
@@ -168,7 +163,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .kv .wxl span:last-child,.kv span.ink:first-child{color:var(--ink);font:14px var(--sans);white-space:nowrap}
 .kv input[type=time]{border:1px solid var(--line);border-radius:7px;background:transparent;padding:4px 6px;font:13px var(--mono);color:var(--ink);color-scheme:light dark}
 .locnote button{text-decoration:underline;text-underline-offset:2px;color:var(--ink);font-size:inherit}
-.print{margin-left:auto;height:40px;padding:0 18px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.print{height:40px;padding:0 18px;border-radius:10px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
 .print:disabled{opacity:.4;cursor:default}
 /* Quiet note under the Print button, only while the printer has a problem */
 .pnote{width:var(--col);margin-top:14px;text-align:center;font-size:13px;color:var(--muted);line-height:1.5}
@@ -273,6 +268,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
   </div>
   <span class="mitem" id="usbItem" title="USB-C"><span class="led off" id="usbLed"></span><span class="t">USB-C</span></span>
   <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
+  <button class="mitem" id="connBtn" title="Connectors"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
   <button class="mitem" id="wifiBtn"><span class="led off" id="wifiLed"></span><span class="t" id="wifiLabel">Set up Wi-Fi</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
@@ -290,6 +286,51 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     <code id="okIp"></code>
     <button class="link" id="changeNet">Change network</button>
     <button class="link" id="forgetNet">Forget this network</button>
+  </div>
+</div>
+
+<!-- Connectors popover: the list, or one connector's panel in its place -->
+<div class="pop" id="connPop">
+  <div id="connList">
+    <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r" id="connWx">›</span></button>
+    <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
+    <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
+    <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
+    <div class="sep"></div>
+    <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
+  </div>
+  <!-- Weather: print now, and when it prints by itself -->
+  <div id="wxPanel" hidden>
+    <div class="wxhead"><button class="back" id="wxBack" aria-label="Back to connectors">‹</button><span class="ico">☀</span>Weather<input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
+    <div class="grp wxpad"><div class="wxrow">
+      <select id="wxKind" aria-label="Which forecast to print">
+        <option value="today">Today</option><option value="rest">Rest of today</option><option value="tomorrow">Tomorrow</option>
+      </select>
+      <button class="wxbtn" id="wxPrint">Print now</button>
+    </div></div>
+    <h3>Places</h3>
+    <div class="grp">
+      <div id="wxPlaceList"></div>
+      <div class="kv" id="wxAddRow"><input type="text" class="add" id="wxAdd" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Add a ZIP code or city" aria-label="Add a place: type a ZIP code or a city"></div>
+      <div class="matches" id="wxMatches"></div>
+      <div class="locnote" id="wxPlaceNote" role="status" hidden></div>
+    </div>
+    <h3>Schedule</h3>
+    <div class="grp">
+      <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
+      <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
+      <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
+      <div class="locnote">Up to 3 scheduled prints a day. <button id="wxPro">Upgrade to Pro</button> for more.</div>
+    </div>
+    <h3>Ticket look</h3>
+    <div class="grp">
+      <div class="kv"><span>Font</span>
+        <select id="wxFont" aria-label="Font of weather tickets">
+          <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Printer default</option>
+        </select></div>
+      <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
+      <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
+    </div>
   </div>
 </div>
 
@@ -361,58 +402,8 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     Drop or paste JPG, PNG, SVG, or PDF
   </label>
 
-  <!-- Connectors + Print -->
+  <!-- Print -->
   <div class="row">
-    <div class="dd" id="conn">
-      <button class="ddbtn" id="connBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>
-        Connectors
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
-      </button>
-      <div class="menu" id="connMenu">
-        <div id="connList">
-          <button class="mi" data-c="weather"><span class="ico" style="background:#f5a623">☀</span>Weather<span class="r" id="connWx">›</span></button>
-          <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
-          <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
-          <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
-          <div class="sep"></div>
-          <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
-        </div>
-        <!-- Weather: print now, and when it prints by itself -->
-        <div id="wxPanel" hidden>
-          <div class="wxhead"><button class="back" id="wxBack" aria-label="Back to connectors">‹</button><span class="ico">☀</span>Weather<input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
-          <div class="grp wxpad"><div class="wxrow">
-            <select id="wxKind" aria-label="Which forecast to print">
-              <option value="today">Today</option><option value="rest">Rest of today</option><option value="tomorrow">Tomorrow</option>
-            </select>
-            <button class="wxbtn" id="wxPrint">Print now</button>
-          </div></div>
-          <h3>Places</h3>
-          <div class="grp">
-            <div id="wxPlaceList"></div>
-            <div class="kv" id="wxAddRow"><input type="text" class="add" id="wxAdd" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Add a ZIP code or city" aria-label="Add a place: type a ZIP code or a city"></div>
-            <div class="matches" id="wxMatches"></div>
-            <div class="locnote" id="wxPlaceNote" role="status" hidden></div>
-          </div>
-          <h3>Schedule</h3>
-          <div class="grp">
-            <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
-            <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
-            <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
-            <div class="locnote">Up to 3 scheduled prints a day. <button id="wxPro">Upgrade to Pro</button> for more.</div>
-          </div>
-          <h3>Ticket look</h3>
-          <div class="grp">
-            <div class="kv"><span>Font</span>
-              <select id="wxFont" aria-label="Font of weather tickets">
-                <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Printer default</option>
-              </select></div>
-            <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
-            <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
-          </div>
-        </div>
-      </div>
-    </div>
     <button class="print" id="printBtn">Print</button>
   </div>
   <div class="pnote" id="prnNote" role="status" aria-live="polite" hidden><span class="led" id="prnNoteLed"></span><b id="prnWhat"></b><span id="prnHeld"></span><br><span id="prnHint"></span></div>
@@ -435,7 +426,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
   const c=document.getElementById('grid'), g=c.getContext('2d');
   const m={x:-9999,y:-9999,sx:-9999,sy:-9999,active:0};
   let base=[0,0,0],hot=[0,0,0],W=0,H=0,dpr=1; const SP=16,R=150;
-  const SOLID='.tools,.paper,.drop,.ddbtn,.print,.pop.open,.dd.open .menu,.toast.on,body.offline #offline .card';
+  const SOLID='.tools,.paper,.drop,.print,.pop.open,.toast.on,body.offline #offline .card';
   const hex=v=>{v=v.trim().replace('#','');return[0,2,4].map(i=>parseInt(v.slice(i,i+2),16))};
   const colors=()=>{const s=getComputedStyle(document.documentElement);base=hex(s.getPropertyValue('--dot'));hot=hex(s.getPropertyValue('--dot-hot'))};
   const size=()=>{dpr=Math.min(devicePixelRatio,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr};
@@ -777,18 +768,17 @@ let beats=0;
 /* menu bar goes frosted only once you scroll */
 addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{passive:true});
 
-/* popovers + dropdown */
+/* popovers */
 function closeAll(except){
   if(updating)except='gearPop';     // a firmware update is running: its progress stays on screen
   if(except!=='gearPop')closeSheet();
-  ['wifiPop','gearPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
-  if(except!=='conn')$('conn').classList.remove('open');
-  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop');
+  ['wifiPop','gearPop','connPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
+  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('connBtn').classList.toggle('on',except==='connPop');
 }
 $('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
-$('connBtn').onclick=e=>{e.stopPropagation();const o=!$('conn').classList.contains('open');closeAll(o?'conn':null);if(o)showConnView(false);$('conn').classList.toggle('open',o)};
-document.addEventListener('click',e=>{if(!e.target.closest('.pop,.dd'))closeAll(null)});
+$('connBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('connPop').classList.contains('open');closeAll(o?'connPop':null);if(o)showConnView(false);$('connPop').classList.toggle('open',o)};
+document.addEventListener('click',e=>{if(!e.target.closest('.pop'))closeAll(null)});
 
 /* ---------- Firmware update ---------- */
 /* Settings > Firmware:
@@ -1278,14 +1268,14 @@ document.addEventListener('paste',e=>{
 $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
 
 /* ---------- Connectors ---------- */
-/* Weather is the one connector so far. Clicking it opens its panel in the menu: "Print now" for
+/* Weather is the one connector so far. Clicking it opens its panel in the Connectors popover (top bar): "Print now" for
    today, the rest of today or tomorrow; the places (one is selected: tickets are for it, and it is
    the header's location); the schedule (three times a day, each with a switch; the switch at the top
    is for the whole schedule); and the font and size the ticket is drawn in. The board fetches the forecast from the
    National Weather Service and prints it itself: nothing is put on the ticket here.
    The schedule lives on the board (POST /api/automations/weather), so it runs with no page open. */
 function showConnView(weather){
-  $('connList').hidden=weather; $('wxPanel').hidden=!weather; $('connMenu').classList.toggle('wide',weather);
+  $('connList').hidden=weather; $('wxPanel').hidden=!weather;
 }
 let wxSaving=0, weatherBusy=false, wxPlacesShown='';
 /* From /api/status ("automations": "weather"): the places, the schedule and the look. */
