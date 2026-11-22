@@ -3,21 +3,24 @@
 #
 # How work reaches a printer:
 #
-#   1. Work happens on a branch, never on main. The first change on a branch raises the
-#      version number in CMakeLists.txt, e.g. set(PROJECT_VER "0.4.0").
-#   2. Every push to the branch publishes a BETA build: a pre-release named like
-#      "v0.4.0-beta.7" (the last number goes up with every build). Only printers with
+#   1. Work happens on its own branch (e.g. weather/weekly-forecast), never on main.
+#      Pushing such a branch builds nothing.
+#   2. When a piece of work is ready to try, it is merged into the branch "beta". The version
+#      number in CMakeLists.txt on beta is the release being worked towards, e.g.
+#      set(PROJECT_VER "0.4.0"): raise it with the first change after a release.
+#      Every push to beta publishes a BETA build: a pre-release named like "v0.4.0-beta.7"
+#      (the last number goes up with every build). Only printers with
 #      Settings > Beta updates switched on are offered it.
-#   3. Merging the branch into main publishes the RELEASE "v0.4.0", which every printer is
+#   3. Merging beta into main publishes the RELEASE "v0.4.0", which every printer is
 #      offered. The beta builds that led up to it are deleted.
 #
 # A push to main that does not change the version number does nothing here.
-# A push to a branch whose version number is already released fails, with a note to raise it.
+# A push to beta whose version number is already released fails, with a note to raise it.
 name: Release firmware
 
 on:
   push:
-    branches: ['**']
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:
@@ -48,9 +51,9 @@ jobs:
               echo "needed=true" >> "$GITHUB_OUTPUT"
             fi
           else
-            # a branch: a beta build of the version it is working towards
+            # beta: a beta build of the version it is working towards
             if gh release view "v$version" >/dev/null 2>&1; then
-              echo "::error::v$version is already released. Raise PROJECT_VER in CMakeLists.txt on this branch."
+              echo "::error::v$version is already released. Raise PROJECT_VER in CMakeLists.txt on the beta branch."
               exit 1
             fi
             echo "build=$version-beta.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
@@ -78,7 +81,7 @@ jobs:
           gh release create "v${{ steps.version.outputs.build }}" build/tikprint_firmware.bin \
             --prerelease --target "$GITHUB_SHA" \
             --title "TikPrint v${{ steps.version.outputs.build }}" \
-            --notes "Beta build of the branch \`$GITHUB_REF_NAME\`. Offered only to printers with Beta updates switched on."
+            --notes "Beta build. Offered only to printers with Beta updates switched on."
 
       - name: Publish the release
         if: steps.version.outputs.beta == 'false' && steps.version.outputs.needed == 'true'

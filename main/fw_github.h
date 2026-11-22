@@ -7,7 +7,7 @@
  * A release is tagged with its version ("v0.2.0") and carries the firmware file as an asset.
  *
  * Beta builds are releases too, marked "pre-release" on GitHub and tagged like "v0.4.0-beta.7".
- * They are built from work that is not finished yet (a branch that has not been merged into main).
+ * They are built from the "beta" branch: work that is being tried out before it is merged into main.
  * The board only looks at them when "Beta updates" is switched on in Settings. */
 #define FW_GITHUB_REPO  "krishnakem/TikPrint-Firmware"
 #define FW_GITHUB_ASSET "tikprint_firmware.bin"
