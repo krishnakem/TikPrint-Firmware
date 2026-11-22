@@ -4,7 +4,11 @@
 #include "esp_err.h"
 
 /* Where new firmware comes from: the latest release of this GitHub repository.
- * A release is tagged with its version ("v0.2.0") and carries the firmware file as an asset. */
+ * A release is tagged with its version ("v0.2.0") and carries the firmware file as an asset.
+ *
+ * Beta builds are releases too, marked "pre-release" on GitHub and tagged like "v0.4.0-beta.7".
+ * They are built from the "beta" branch: work that is being tried out before it is merged into main.
+ * The board only looks at them when "Beta updates" is switched on in Settings. */
 #define FW_GITHUB_REPO  "krishnakem/TikPrint-Firmware"
 #define FW_GITHUB_ASSET "tikprint_firmware.bin"
 
@@ -19,8 +23,9 @@ typedef struct {
     fw_github_state_t state;
     bool checked;           // GitHub has answered at least once since boot
     int checked_s_ago;      // seconds since that answer
-    char latest[32];        // version of the latest release, e.g. "0.2.0". "" if unknown or there is none
+    char latest[32];        // version of the latest release, e.g. "0.2.0" or "0.4.0-beta.7". "" if unknown or there is none
     bool available;         // the latest release is newer than what is running
+    bool beta;              // beta builds are offered too (the "Beta updates" switch)
     int progress;           // percent, while downloading
     char error[96];         // what went wrong last time, "" if nothing
 } fw_github_status_t;
@@ -33,6 +38,10 @@ const char *fw_github_state_name(fw_github_state_t state);
 
 /** Ask GitHub now. Returns at once; follow the result with fw_github_get_status(). ESP_ERR_INVALID_STATE if busy. */
 esp_err_t fw_github_check_now(void);
+
+/** Switch beta builds on or off, remember it, and ask GitHub again straight away.
+ *  Returns at once. ESP_ERR_INVALID_STATE if busy (nothing is changed then). */
+esp_err_t fw_github_set_beta(bool on);
 
 /** Download and install the latest release, then restart. Returns at once.
  *  ESP_ERR_INVALID_STATE if busy, ESP_ERR_NOT_FOUND if no newer release is known. */

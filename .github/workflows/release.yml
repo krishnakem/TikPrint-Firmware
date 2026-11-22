@@ -1,16 +1,26 @@
-# Builds the firmware and publishes it as a GitHub release.
+# Builds the firmware and publishes it on GitHub, where printers find it with
+# "Check for updates" (main/fw_github.c).
 #
-# To release: change the version number in CMakeLists.txt (set(PROJECT_VER "0.3.0")),
-# commit and push to main. This workflow sees that there is no release "v0.3.0" yet,
-# builds the firmware and attaches tikprint_firmware.bin to a new release with that name.
-# Printers find it with "Check for updates" (main/fw_github.c).
+# How work reaches a printer:
 #
-# A push that does not change the version number does nothing here.
+#   1. Work happens on its own branch (e.g. weather/weekly-forecast), never on main.
+#      Pushing such a branch builds nothing.
+#   2. When a piece of work is ready to try, it is merged into the branch "beta". The version
+#      number in CMakeLists.txt on beta is the release being worked towards, e.g.
+#      set(PROJECT_VER "0.4.0"): raise it with the first change after a release.
+#      Every push to beta publishes a BETA build: a pre-release named like "v0.4.0-beta.7"
+#      (the last number goes up with every build). Only printers with
+#      Settings > Beta updates switched on are offered it.
+#   3. Merging beta into main publishes the RELEASE "v0.4.0", which every printer is
+#      offered. The beta builds that led up to it are deleted.
+#
+# A push to main that does not change the version number does nothing here.
+# A push to beta whose version number is already released fails, with a note to raise it.
 name: Release firmware
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:
@@ -30,12 +40,33 @@ jobs:
           version=$(sed -n 's/^set(PROJECT_VER "\(.*\)")$/\1/p' CMakeLists.txt)
           if [ -z "$version" ]; then echo "No PROJECT_VER found in CMakeLists.txt"; exit 1; fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if gh release view "v$version" >/dev/null 2>&1; then
-            echo "Release v$version already exists: nothing to do."
-            echo "needed=false" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            # main: a release, unless this version is out already
+            echo "build=$version" >> "$GITHUB_OUTPUT"
+            echo "beta=false" >> "$GITHUB_OUTPUT"
+            if gh release view "v$version" >/dev/null 2>&1; then
+              echo "Release v$version already exists: nothing to do."
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "needed=true" >> "$GITHUB_OUTPUT"
+            fi
           else
+            # beta: a beta build of the version it is working towards
+            if gh release view "v$version" >/dev/null 2>&1; then
+              echo "::error::v$version is already released. Raise PROJECT_VER in CMakeLists.txt on the beta branch."
+              exit 1
+            fi
+            echo "build=$version-beta.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "beta=true" >> "$GITHUB_OUTPUT"
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # The firmware reports the version it was built with, so a beta has to carry its full name.
+      - name: Name the beta build
+        if: steps.version.outputs.beta == 'true'
+        run: |
+          sed -i 's/^set(PROJECT_VER ".*")$/set(PROJECT_VER "${{ steps.version.outputs.build }}")/' CMakeLists.txt
+          grep PROJECT_VER CMakeLists.txt
 
       - name: Build the firmware (ESP-IDF v6.1.1)
         if: steps.version.outputs.needed == 'true'
@@ -44,9 +75,21 @@ jobs:
           esp_idf_version: v6.1.1
           target: esp32s3
 
+      - name: Publish the beta build
+        if: steps.version.outputs.beta == 'true'
+        run: |
+          gh release create "v${{ steps.version.outputs.build }}" build/tikprint_firmware.bin \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "TikPrint v${{ steps.version.outputs.build }}" \
+            --notes "Beta build. Offered only to printers with Beta updates switched on."
+
       - name: Publish the release
-        if: steps.version.outputs.needed == 'true'
+        if: steps.version.outputs.beta == 'false' && steps.version.outputs.needed == 'true'
         run: |
           gh release create "v${{ steps.version.outputs.version }}" build/tikprint_firmware.bin \
             --title "TikPrint v${{ steps.version.outputs.version }}" \
             --target "$GITHUB_SHA" --generate-notes
+          # The beta builds that led up to this release have done their job.
+          gh release list --limit 200 --json tagName --jq '.[].tagName' \
+            | grep "^v${{ steps.version.outputs.version }}-beta\." \
+            | while read -r tag; do gh release delete "$tag" --cleanup-tag --yes; done || true

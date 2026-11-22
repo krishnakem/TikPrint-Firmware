@@ -28,6 +28,14 @@ void settings_get(settings_t *out);
 /** Change the settings and remember them across reboots. ESP_ERR_INVALID_ARG if the location or font name is not plain text. */
 esp_err_t settings_set(const settings_t *in);
 
+/* ---- Firmware updates ---- */
+
+/** True = "Check for updates" also offers beta builds (see fw_github.c). Off until switched on. */
+bool settings_get_beta_updates(void);
+
+/** Change it and remember it across reboots. */
+void settings_set_beta_updates(bool on);
+
 /* ---- Automations: weather ---- */
 
 #define SETTINGS_ZIP_MAX 6   // a US ZIP code is five digits, plus the ending 0

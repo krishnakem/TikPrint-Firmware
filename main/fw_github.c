@@ -10,6 +10,13 @@
  *   check    GET https://api.github.com/repos/<repo>/releases/latest   (a small JSON answer)
  *   install  GET https://github.com/<repo>/releases/download/v0.2.0/tikprint_firmware.bin
  *
+ * Beta builds: with "Beta updates" switched on, the check asks for the newest few releases
+ * instead (GET .../releases), which also lists the pre-releases, and takes the highest version
+ * among them. A beta is numbered after the release it leads up to: 0.4.0-beta.1, 0.4.0-beta.2, ...
+ * are all older than 0.4.0 itself, so the finished release replaces them like any other update.
+ * Switching the betas off again does not go back to an older version: the board keeps the beta
+ * it has until a finished release overtakes it.
+ *
  * - Both go over HTTPS and GitHub's certificate is verified, so the file really comes from
  *   that repository. Whoever can publish a release there decides what the printer runs.
  * - It only ever moves to a NEWER version, and only installs when asked to.
@@ -38,10 +45,12 @@
 #include "fw_update.h"
 #include "wifi_mgr.h"
 #include "printer.h"
+#include "settings.h"
 
 static const char *TAG = "fw_github";
 
 #define LATEST_URL       "https://api.github.com/repos/" FW_GITHUB_REPO "/releases/latest"
+#define RECENT_URL       "https://api.github.com/repos/" FW_GITHUB_REPO "/releases?per_page=5"   // newest first, betas included
 #define DOWNLOAD_URL_FMT "https://github.com/" FW_GITHUB_REPO "/releases/download/%s/" FW_GITHUB_ASSET
 #define USER_AGENT       "TikPrint-Firmware"   // GitHub refuses requests that do not say who is asking
 
@@ -49,7 +58,8 @@ static const char *TAG = "fw_github";
 #define AUTO_CHECK_S     (24 * 60 * 60)  // then once a day
 #define AUTO_RETRY_S     (60 * 60)       // after a check that failed, try again in an hour
 #define HTTP_TIMEOUT_MS  15000
-#define RELEASE_JSON_MAX (48 * 1024)     // GitHub's answer is a few KB; anything bigger is not what we asked for
+#define RELEASE_JSON_MAX (96 * 1024)     // one release is a few KB, a list of five a few times that; anything bigger is not what we asked for
+#define NOT_A_BETA       1000000         // where a finished release sorts among its betas: after all of them
 #define WAIT_FOR_PRINTS_S 30             // before restarting, let tickets that are printing finish (at most this long)
 #define TASK_STACK       12288           // HTTPS needs a deep stack
 
@@ -59,7 +69,7 @@ static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
 static fw_github_status_t s_status;
 static command_t s_command;
-static char s_tag[40];             // the release's tag exactly as GitHub gave it, e.g. "v0.2.0"
+static char s_tag[40];             // the release's tag exactly as GitHub gave it, e.g. "v0.2.0" or "v0.4.0-beta.7"
 static int64_t s_checked_at_us;    // when GitHub last answered
 static int64_t s_next_auto_us;     // when to check next without being asked
 
@@ -75,9 +85,11 @@ const char *fw_github_state_name(fw_github_state_t state)
 
 void fw_github_get_status(fw_github_status_t *out)
 {
+    bool beta = settings_get_beta_updates();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = s_status;
     out->checked_s_ago = s_status.checked ? (int)((esp_timer_get_time() - s_checked_at_us) / 1000000) : 0;
+    out->beta = beta;
     xSemaphoreGive(s_lock);
 }
 
@@ -130,6 +142,25 @@ esp_err_t fw_github_install(void)
     return ask(CMD_INSTALL);
 }
 
+esp_err_t fw_github_set_beta(bool on)
+{
+    // The setting goes in before the check is asked for, because the check reads it as it starts.
+    bool before = settings_get_beta_updates();
+    settings_set_beta_updates(on);
+    esp_err_t err = ask(CMD_CHECK);
+    if (err != ESP_OK) {
+        settings_set_beta_updates(before);   // busy: the switch stays as it was
+        return err;
+    }
+    // What was found before belongs to the other setting: forget it until GitHub has answered again.
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.available = false;
+    s_status.checked = false;
+    s_status.latest[0] = 0;
+    xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
 static bool wifi_up(void)
 {
     wifi_mgr_status_t w;
@@ -137,23 +168,26 @@ static bool wifi_up(void)
     return w.connected;
 }
 
-/* "0.2.0" or "v0.2.0" -> {0, 2, 0}. False if it does not look like a version. */
-static bool parse_version(const char *text, int out[3])
+/* "0.2.0" or "v0.2.0" -> {0, 2, 0, NOT_A_BETA}; "v0.4.0-beta.7" -> {0, 4, 0, 7}.
+ * The fourth number puts the betas of a version in order, and the finished release after them.
+ * False if it does not look like a version. */
+static bool parse_version(const char *text, int out[4])
 {
     if (*text == 'v' || *text == 'V') {
         text++;
     }
     out[0] = out[1] = out[2] = 0;
-    return sscanf(text, "%d.%d.%d", &out[0], &out[1], &out[2]) >= 2;
+    out[3] = NOT_A_BETA;
+    return sscanf(text, "%d.%d.%d-beta.%d", &out[0], &out[1], &out[2], &out[3]) >= 2;
 }
 
 static bool is_newer(const char *candidate, const char *than)
 {
-    int a[3], b[3];
+    int a[4], b[4];
     if (!parse_version(candidate, a) || !parse_version(than, b)) {
         return false;
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (a[i] != b[i]) {
             return a[i] > b[i];
         }
@@ -178,12 +212,13 @@ static bool tag_is_plain(const char *tag)
     return true;
 }
 
-/* Fetch GitHub's description of the latest release into buf (as text). Returns the HTTP
- * status (200 = fine, 404 = the repository has no release yet), or -1 if GitHub could not be reached. */
-static int fetch_latest(char *buf, size_t max)
+/* Fetch GitHub's description of the latest release (or, at RECENT_URL, of the newest few) into
+ * buf, as text. Returns the HTTP status (200 = fine, 404 = the repository has no release yet),
+ * or -1 if GitHub could not be reached. */
+static int fetch_releases(const char *url, char *buf, size_t max)
 {
     const esp_http_client_config_t config = {
-        .url = LATEST_URL,
+        .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,   // verify GitHub's certificate
         .timeout_ms = HTTP_TIMEOUT_MS,
         .user_agent = USER_AGENT,
@@ -212,6 +247,29 @@ static int fetch_latest(char *buf, size_t max)
     return status;
 }
 
+/* One release as GitHub describes it. If it carries the firmware file, has a readable tag and is
+ * newer than the one in `best` (or `best` is still empty), it becomes the new `best`.
+ * Returns false if the description could not be read at all. */
+static bool consider_release(const cJSON *release, char best[sizeof(s_tag)])
+{
+    const cJSON *jtag = cJSON_GetObjectItem(release, "tag_name");
+    if (!cJSON_IsString(jtag) || !tag_is_plain(jtag->valuestring)) {
+        return false;
+    }
+    bool has_file = false;
+    const cJSON *asset;
+    cJSON_ArrayForEach(asset, cJSON_GetObjectItem(release, "assets")) {
+        const cJSON *name = cJSON_GetObjectItem(asset, "name");
+        if (cJSON_IsString(name) && strcmp(name->valuestring, FW_GITHUB_ASSET) == 0) {
+            has_file = true;
+        }
+    }
+    if (has_file && (!best[0] || is_newer(jtag->valuestring, best))) {
+        strlcpy(best, jtag->valuestring, sizeof(s_tag));
+    }
+    return true;
+}
+
 static void do_check(void)
 {
     set_state(FW_GITHUB_CHECKING);
@@ -228,24 +286,24 @@ static void do_check(void)
         set_state(FW_GITHUB_IDLE);
         return;
     }
-    int http = fetch_latest(buf, RELEASE_JSON_MAX);
+    bool beta = settings_get_beta_updates();
+    int http = fetch_releases(beta ? RECENT_URL : LATEST_URL, buf, RELEASE_JSON_MAX);
 
-    char tag[sizeof(s_tag)] = "";
-    bool has_file = false;
+    char tag[sizeof(s_tag)] = "";   // the newest release that carries the firmware file; "" if there is none
     const char *problem = NULL;
     if (http == 200) {
+        // Without betas the answer is one release; with them it is a list, and the highest version wins.
         cJSON *json = cJSON_Parse(buf);
-        const cJSON *jtag = cJSON_GetObjectItem(json, "tag_name");
-        const cJSON *asset;
-        cJSON_ArrayForEach(asset, cJSON_GetObjectItem(json, "assets")) {
-            const cJSON *name = cJSON_GetObjectItem(asset, "name");
-            if (cJSON_IsString(name) && strcmp(name->valuestring, FW_GITHUB_ASSET) == 0) {
-                has_file = true;
+        bool readable = json != NULL;
+        if (cJSON_IsArray(json)) {
+            const cJSON *release;
+            cJSON_ArrayForEach(release, json) {
+                readable = consider_release(release, tag) && readable;
             }
+        } else if (json) {
+            readable = consider_release(json, tag);
         }
-        if (cJSON_IsString(jtag) && tag_is_plain(jtag->valuestring)) {
-            strlcpy(tag, jtag->valuestring, sizeof(tag));
-        } else {
+        if (!readable) {
             problem = "GitHub's answer could not be read";
         }
         cJSON_Delete(json);
@@ -267,7 +325,7 @@ static void do_check(void)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(s_tag, tag, sizeof(s_tag));
     strlcpy(s_status.latest, (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag, sizeof(s_status.latest));
-    s_status.available = has_file && is_newer(tag, running);
+    s_status.available = tag[0] && is_newer(tag, running);
     s_status.checked = true;
     s_status.error[0] = 0;
     s_status.state = FW_GITHUB_IDLE;
@@ -275,8 +333,8 @@ static void do_check(void)
     bool available = s_status.available;
     xSemaphoreGive(s_lock);
     s_next_auto_us = esp_timer_get_time() + (int64_t)AUTO_CHECK_S * 1000000;
-    ESP_LOGI(TAG, "running v%s, latest release: %s%s", running, tag[0] ? tag : "none",
-             available ? " (newer: an update is available)" : "");
+    ESP_LOGI(TAG, "running v%s, latest release%s: %s%s", running, beta ? " (betas included)" : "",
+             tag[0] ? tag : "none", available ? " (newer: an update is available)" : "");
 }
 
 static void do_install(void)

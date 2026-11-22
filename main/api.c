@@ -368,6 +368,7 @@ static esp_err_t status_get(httpd_req_t *req)
     // after every restart. The rest is about updates from GitHub (see fw_github.h): "latest" is the newest
     // release ("" if not known), "available" says it is newer than this one, "state" is what the board is
     // doing about it (idle, checking, downloading, restarting), "progress" is the download in percent.
+    // "beta" says whether beta builds are offered too (the "Beta updates" switch).
     const esp_app_desc_t *app = esp_app_get_description();
     char built[40];
     snprintf(built, sizeof(built), "%s %s", app->date, app->time);
@@ -383,6 +384,7 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(upd, "state", fw_github_state_name(gh.state));
     cJSON_AddStringToObject(upd, "latest", gh.latest);
     cJSON_AddBoolToObject(upd, "available", gh.available);
+    cJSON_AddBoolToObject(upd, "beta", gh.beta);
     cJSON_AddNumberToObject(upd, "progress", gh.progress);
     cJSON_AddStringToObject(upd, "error", gh.error);
     if (gh.checked) {
@@ -907,6 +909,33 @@ static esp_err_t update_check_post(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/* ---------- POST /api/update/channel ----------
+ * {"beta": true} = also offer beta builds, {"beta": false} = finished releases only. The choice is
+ * saved on the board, and it asks GitHub again at once. Replies {"ok":true} straight away; the
+ * answer arrives in /api/status, as after /api/update/check. */
+static esp_err_t update_channel_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *jbeta = cJSON_GetObjectItem(body, "beta");
+    bool given = cJSON_IsBool(jbeta), beta = cJSON_IsTrue(jbeta);
+    cJSON_Delete(body);
+    if (!given) {
+        return refuse(req, "400 Bad Request", "bad_setting", "Say \"beta\": true or false");
+    }
+    if (fw_github_set_beta(beta) != ESP_OK) {
+        return refuse(req, "409 Conflict", "busy", "The printer is already checking or updating");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
 /* ---------- POST /api/update/install ----------
  * Download the latest release from GitHub and restart into it. Only does anything if a
  * check found a release newer than the running firmware. Replies {"ok":true} at once;
@@ -1367,6 +1396,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/last-ticket",  .method = HTTP_GET,  .handler = last_ticket_get },
         { .uri = "/api/last-ticket.pbm", .method = HTTP_GET, .handler = last_ticket_pbm_get },
         { .uri = "/api/update/check", .method = HTTP_POST, .handler = update_check_post },
+        { .uri = "/api/update/channel", .method = HTTP_POST, .handler = update_channel_post },
         { .uri = "/api/update/install", .method = HTTP_POST, .handler = update_install_post },
         { .uri = "/api/update",       .method = HTTP_POST, .handler = update_post },
         { .uri = "/api/automations/weather", .method = HTTP_POST, .handler = weather_post },
