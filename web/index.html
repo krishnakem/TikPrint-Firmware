@@ -71,7 +71,7 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 #doc{width:576px;min-height:150px;transform-origin:0 0;outline:none;font:400 28px/1.35 "Inter",Helvetica,Arial,sans-serif;white-space:pre-wrap;overflow-wrap:break-word}
 /* faded hint on an empty Title / body line. It sits inside the line, so it follows that line's font and size. */
 #doc>.blank::before{content:attr(data-ph);color:#bbb;position:absolute;pointer-events:none}
-/* A line set entirely in the "Printer default" font is printed by the printer in its own built-in font
+/* A line set entirely in the "Receipt" font is printed by the printer in its own built-in font
    (see "Printer font" in the script). Its letters only come 12 dots wide and 24 tall, or a whole number
    of times that (--m), so the line is shown in a look-alike font at exactly that size, whatever size was picked. */
 #doc>.pf,#doc>.pf *{font-family:"Printer",monospace!important;font-size:calc(20px*var(--m,1))!important;line-height:var(--lh,30px)!important;font-style:normal!important;letter-spacing:0!important}
@@ -326,7 +326,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .t
     <div class="grp">
       <div class="kv"><span>Font</span>
         <select id="wxFont" aria-label="Font of weather tickets">
-          <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Printer default</option>
+          <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Receipt</option>
         </select></div>
       <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
       <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
@@ -498,7 +498,9 @@ function showLocState(){
 }
 let boardTime=null;   // the board's clock as last reported: {wall: its local time in ms, at: when this page heard it, zone: "PST"}
 function headerParts(){
-  const now=boardTime?new Date(boardTime.wall+performance.now()-boardTime.at):null, fmt=o=>now.toLocaleString('en-US',{timeZone:'UTC',...o}).toUpperCase();
+  // Date in capitals ("NOV 21, 2026"), except in the "Receipt" font, where it reads as the board writes it ("Nov 21, 2026")
+  const now=boardTime?new Date(boardTime.wall+performance.now()-boardTime.at):null, caps=hdr.header_font!=='Printer';
+  const fmt=o=>{const t=now.toLocaleString('en-US',{timeZone:'UTC',...o}); return caps?t.toUpperCase():t};
   const place=hdr.location||autoPlace();   // shown as typed
   const date=now&&hdr.show_date?fmt({month:'short',day:'numeric',year:'numeric'}):'';
   const time=now&&hdr.show_time?fmt({hour:'numeric',minute:'2-digit'})+(boardTime.zone?' '+boardTime.zone:''):'';
@@ -1374,7 +1376,7 @@ $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 
 /* ---------- Editor ---------- */
 /* The printer's built-in font can't be changed, so the page draws the text itself, as dots.
-   (Except lines in the "Printer default" font: those the printer prints itself. See "Printer font".)
+   (Except lines in the "Receipt" font: those the printer prints itself. See "Printer font".)
    The ticket is a small word processor: select text, then pick a font, size or style.
    The font files live on the board (web/fonts), so this works with no internet.
    To add a font: see the note in main/CMakeLists.txt. */
@@ -1386,7 +1388,7 @@ const FONTS=[
   {name:'Caveat',         file:'caveat',         weight:'400 700'},
   {name:'JetBrains Mono', file:'jetbrains-mono', weight:'100 800'},
   // The printer's own built-in font (see "Printer font" below). The file is only its look-alike on screen.
-  {name:'Printer',        file:'jetbrains-mono', weight:'100 800', label:'Printer default'},
+  {name:'Printer',        file:'jetbrains-mono', weight:'100 800', label:'Receipt'},
 ];
 const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, true to size on paper
 const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
@@ -1432,7 +1434,7 @@ document.addEventListener('selectionchange',()=>{
   if(sel.rangeCount&&doc.contains(sel.anchorNode)){savedSel=sel.getRangeAt(0).cloneRange();showState()}
 });
 /* ---- Printer font ---- */
-/* "Printer default" in the font menu is the font built into the printer. A line set entirely in it is
+/* "Receipt" in the font menu is the font built into the printer. A line set entirely in it is
    not drawn as dots: its words are sent to the printer, which prints them itself (sharp, and fast).
    - The printer's letters are 12 dots wide and 24 tall, 48 to a line. Bigger sizes are whole multiples
      of that (2x = 24 to a line, 3x = 16, ...), so the size picked is rounded to the nearest one.
@@ -1463,11 +1465,14 @@ function runsOf(cells){
   }
   return runs.map(r=>({text:r.text,...(r.st&1&&{bold:true}),...(r.st&2&&{underline:true})}));
 }
-/* The ticket header as one line of the printer's font: left part at the left edge, date and time at the right. */
+/* The ticket header as one line of the printer's SMALL font (9 dots wide, so 64 letters fit on a line, not 48):
+   left part at the left edge, date and time at the right. The same look as the header the board prints
+   itself on weather tickets in this font (send_header in printer_thermal.c). */
+const PF_HDR_COLS=64;
 function headerLine(){
-  let {left,right}=headerParts(); const room=PF_COLS-(right?right.length+2:0);
+  let {left,right}=headerParts(); const room=PF_HDR_COLS-(right?right.length+2:0);
   if(left.length>room)left=left.slice(0,room-3)+'...';
-  return (left+' '.repeat(Math.max(1,PF_COLS-left.length-right.length))+right).trimEnd();
+  return (left+' '.repeat(Math.max(1,PF_HDR_COLS-left.length-right.length))+right).trimEnd();
 }
 
 /* Clean up after the browser's editing commands. */
@@ -1671,7 +1676,7 @@ function docBits(source){
   }
   // Printer-font lines are not in the image. Cut the rows where each one sits out of it, and list the
   // ticket top to bottom as "parts": image rows and lines of printer text in turn (see build_layout in api.c).
-  const cuts=hdrNative?[{a:0,b:HDR_H,part:{size:1,runs:[{text:headerLine()}]}}]:[];
+  const cuts=hdrNative?[{a:0,b:HDR_H,part:{small:true,runs:[{text:headerLine()}]}}]:[];
   for(const n of natives)if(n.y>up-.5&&n.y<low-.5){   // empty lines above the first and below the last thing printed are left out
     const a=Math.round(top+n.y); cuts.push({a,b:Math.min(h,a+n.rows),part:n.part});
   }
@@ -1695,7 +1700,7 @@ const docText=()=>doc.innerText.trim();
    The image is the text (drawn above) followed by the file's dots. The plain words are sent too,
    for the board's log. If the fonts didn't load, the text is left out of the image and the board
    prints those plain words in the printer's built-in font instead.
-   Lines set in the "Printer default" font are not in the image either: they go in the JSON as "parts".
+   Lines set in the "Receipt" font are not in the image either: they go in the JSON as "parts".
    Returns null if there is too much text. */
 function printBody(){
   const meta={title:'',body:docText().slice(0,3000),source:$('pSrc').classList.contains('on')?$('srcName').textContent:''};
