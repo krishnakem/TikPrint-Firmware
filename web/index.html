@@ -30,7 +30,7 @@ button{cursor:pointer;background:none;border:0;padding:0}
 #grid{position:fixed;inset:0;width:100vw;height:100vh;z-index:0;pointer-events:none}
 
 /* ---------- Transparent menu bar ---------- */
-.menubar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:6px;padding:14px 20px;transition:background .2s}
+.menubar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:6px;padding:14px 20px;transition:background .2s,right .28s cubic-bezier(.2,.8,.2,1)}
 .logo{display:flex;align-items:center;gap:8px;font:600 15px var(--sans);letter-spacing:-.01em;margin-right:auto}
 .mitem{background:transparent;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 11px;border-radius:8px;font-size:14px;color:var(--muted)}
 .mitem:hover,.mitem.on{color:var(--ink);background:transparent}
@@ -139,10 +139,10 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .mi .r{margin-left:auto;font-size:12px;color:var(--muted)}
 .mi .r.ok{color:var(--ok)}
 .sep{height:1px;background:var(--line);margin:5px 4px}
-/* The Weather card in the Connectors pane */
+/* Weather's settings in the Connectors pane */
 #connPop h3{font-size:13px;font-weight:600;color:var(--muted);margin:12px 10px 6px}
-.wxhead{display:flex;align-items:center;gap:10px;padding:4px 6px 10px;font-size:14px;font-weight:600}
-.wxhead .ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:700 11px var(--sans);color:#fff;background:#f5a623}
+.wxhead{display:flex;align-items:center;gap:12px;padding:0 6px 14px;font-size:15px;font-weight:600}
+.wxhead .ico{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font:700 17px var(--sans);color:#fff;background:#f5a623}
 .wxhead .sw{margin-left:auto}
 .wxhead .nm{display:flex;flex-direction:column;line-height:1.25}
 .wxhead small{font-size:12px;font-weight:400;color:var(--muted)}
@@ -253,20 +253,36 @@ button.kv:hover{background:var(--hover)}
 
 /* ---------- Connectors pane ---------- */
 /* Opened from the top bar, and it stays open while you work. On a wide screen it takes the right-hand
-   side and the ticket column slides over to sit centred in the room that is left. On a narrow screen
-   there is no room to share, so it lies over the page instead (full width on a phone).
-   It sits under the top bar (which stays clickable), so its own content starts below it. */
-.pane{position:fixed;top:0;right:0;bottom:0;z-index:9;width:var(--pane);display:flex;flex-direction:column;padding-top:56px;background:var(--card);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .28s cubic-bezier(.2,.8,.2,1),visibility 0s .28s}
+   side from top to bottom: the top bar and the ticket column both move over into the room that is
+   left, so nothing sits on top of the pane. On a narrow screen there is no room to share, so it lies
+   over the whole page instead (full width on a phone) and its ✕ closes it.
+   It has two views: the connectors as a grid of apps, and one connector's settings (‹ goes back). */
+.pane{position:fixed;top:0;right:0;bottom:0;z-index:12;width:var(--pane);display:flex;flex-direction:column;background:var(--card);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .28s cubic-bezier(.2,.8,.2,1),visibility 0s .28s}
 .pane.open{transform:none;visibility:visible;transition:transform .28s cubic-bezier(.2,.8,.2,1)}
-.pane .scroll{flex:1;overflow-y:auto;padding:4px 10px 24px}
-.panehead{display:flex;align-items:center;justify-content:space-between;padding:0 2px 10px 8px;font-size:15px;font-weight:600}
+.pane .scroll{flex:1;overflow-y:auto;padding:14px 10px 24px}
+#connPop [hidden]{display:none}
+.panehead{display:flex;align-items:center;gap:2px;height:32px;margin-bottom:12px;padding-left:8px;font-size:15px;font-weight:600}
 .panehead button{width:32px;height:32px;border-radius:8px;color:var(--muted);font-size:14px}
 .panehead button:hover{color:var(--ink);background:var(--hover)}
+.panehead #connBack{font-size:20px;line-height:1;margin-left:-8px}
+.panehead #connClose{margin-left:auto}
+/* The grid of apps: a big rounded icon with the name under it, like a phone's home screen */
+.apps{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.app{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 4px 12px;border-radius:14px;font-size:13px;line-height:1.25;text-align:center}
+.app:hover{background:var(--hover)}
+.app .ico{position:relative;width:54px;height:54px;border-radius:15px;display:grid;place-items:center;font:700 20px var(--sans);color:#fff}
+.app small{display:block;margin-top:1px;font-size:11.5px;color:var(--muted)}
+.app.soon .ico{opacity:.5}
+.app .ico.dash{background:transparent;color:var(--muted);border:1.5px dashed var(--line);font-weight:400;font-size:24px}
+/* a green dot on the icon while that connector prints by itself */
+.app .ico.auto::after{content:"";position:absolute;top:-3px;right:-3px;width:11px;height:11px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2.5px var(--card)}
 main{transition:padding-right .28s cubic-bezier(.2,.8,.2,1)}
 body.paneopen main{padding-right:calc(var(--pane) + 20px)}
-@media (max-width:860px){ body.paneopen main{padding-right:20px} .pane{box-shadow:-16px 0 40px rgba(0,0,0,.14)} }
+body.paneopen .menubar{right:var(--pane)}
+body.paneopen .pop{right:calc(var(--pane) + 20px)}
+@media (max-width:860px){ body.paneopen main{padding-right:20px} body.paneopen .menubar{right:0} body.paneopen .pop{right:20px} .pane{box-shadow:-16px 0 40px rgba(0,0,0,.14)} }
 @media (max-width:500px){ .pane{width:100%;border-left:0} }
-@media (prefers-reduced-motion:reduce){.pane,.pane.open,main{transition:none}}
+@media (prefers-reduced-motion:reduce){.pane,.pane.open,main,.menubar{transition:none}}
 
 .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);opacity:0;background:var(--btn);color:var(--btn-ink);padding:9px 14px;border-radius:10px;font-size:14px;transition:.25s;z-index:20}
 .toast.on{opacity:1;transform:translate(-50%,0)}
@@ -314,13 +330,20 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
 </div>
 
-<!-- Connectors pane: one card per connector. Weather is the only one that works so far. -->
+<!-- Connectors pane: the connectors as a grid of apps; clicking one shows its settings. Weather is the only one that works so far. -->
 <aside class="pane" id="connPop" aria-label="Connectors">
   <div class="scroll">
-    <div class="panehead">Connectors<button id="connClose" aria-label="Close connectors">✕</button></div>
+    <div class="panehead"><button id="connBack" aria-label="Back to all connectors" hidden>‹</button>Connectors<button id="connClose" aria-label="Close connectors">✕</button></div>
+    <div class="apps" id="appGrid">
+      <button class="app" data-c="weather"><span class="ico" id="appWxIco" style="background:#f5a623">☀</span><span>Weather<small id="connWx"></small></span></button>
+      <button class="app soon" data-c="todoist"><span class="ico" style="background:#e44332">T</span><span>Todoist<small>Soon</small></span></button>
+      <button class="app soon" data-c="gcal"><span class="ico" style="background:#4285f4">31</span><span>Google Calendar<small>Soon</small></span></button>
+      <button class="app soon" data-c="notion"><span class="ico" style="background:#111">N</span><span>Notion<small>Soon</small></span></button>
+      <button class="app" data-c="add"><span class="ico dash">+</span><span>Add</span></button>
+    </div>
     <!-- Weather: print now, and when it prints by itself -->
-    <div id="wxPanel">
-      <div class="wxhead"><span class="ico">☀</span><span class="nm">Weather<small id="connWx"></small></span><input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
+    <div id="wxPanel" hidden>
+      <div class="wxhead"><span class="ico">☀</span><span class="nm">Weather<small id="wxWhere"></small></span><input type="checkbox" class="sw" id="wxOn" aria-label="Print the weather on a schedule"></div>
       <div class="grp wxpad"><div class="wxrow">
         <select id="wxKind" aria-label="Which forecast to print">
           <option value="today">Today</option><option value="rest">Rest of today</option><option value="tomorrow">Tomorrow</option>
@@ -350,14 +373,6 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
         <div class="kv"><span>Text size</span><div class="seg sml" id="wxSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
         <label class="kv"><span>Hour-by-hour list</span><input type="checkbox" class="sw" id="wxHours"></label>
       </div>
-    </div>
-    <h3>Coming soon</h3>
-    <div id="connList">
-      <button class="mi" data-c="todoist"><span class="ico" style="background:#e44332">T</span>Todoist<span class="r">Soon</span></button>
-      <button class="mi" data-c="gcal"><span class="ico" style="background:#4285f4">31</span>Google Calendar<span class="r">Soon</span></button>
-      <button class="mi" data-c="notion"><span class="ico" style="background:#111">N</span>Notion<span class="r">Soon</span></button>
-      <div class="sep"></div>
-      <button class="mi" data-c="add"><span class="ico" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">+</span>Add connector</button>
     </div>
   </div>
 </aside>
@@ -814,12 +829,15 @@ function closeAll(except){
 $('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
 /* The Connectors pane is not a popover: it stays open until its button or its ✕ is pressed. */
+function showConn(weather){$('appGrid').hidden=weather; $('wxPanel').hidden=!weather; $('connBack').hidden=!weather}
 function showPane(on){
+  if(on)showConn(false);   // it always opens on the grid of apps
   $('connPop').classList.toggle('open',on); document.body.classList.toggle('paneopen',on);
   $('connBtn').classList.toggle('on',on); $('connBtn').setAttribute('aria-expanded',on);
 }
 $('connBtn').onclick=()=>showPane(!$('connPop').classList.contains('open'));
 $('connClose').onclick=()=>showPane(false);
+$('connBack').onclick=()=>showConn(false);
 document.addEventListener('click',e=>{if(!e.target.closest('.pop'))closeAll(null)});
 
 /* ---------- Firmware update ---------- */
@@ -1310,7 +1328,7 @@ document.addEventListener('paste',e=>{
 $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
 
 /* ---------- Connectors ---------- */
-/* Weather is the one connector so far. Its card in the Connectors pane has: "Print now" for
+/* Weather is the one connector so far. Clicking its app in the Connectors pane shows its settings: "Print now" for
    today, the rest of today or tomorrow; the places (one is selected: tickets are for it, and it is
    the header's location); the schedule (three times a day, each with a switch; the switch at the top
    is for the whole schedule); and the font and size the ticket is drawn in. The board fetches the forecast from the
@@ -1321,7 +1339,10 @@ let wxSaving=0, weatherBusy=false, wxPlacesShown='';
 function showWeatherPanel(w){
   const sch=w.schedule; if(!sch)return;
   const places=w.places||[], n=sch.slots.filter(x=>x.on).length, where=(w.place||w.zip||'').split(',')[0];
-  $('connWx').textContent=!places.length?'Add a place to start':`${where} · ${sch.on&&n?n+' a day':'schedule off'}`;
+  const auto=places.length&&sch.on&&n;
+  $('connWx').textContent=!places.length?'Set up':auto?n+' a day':'Off';   // under the app's icon
+  $('appWxIco').classList.toggle('auto',!!auto);
+  $('wxWhere').textContent=!places.length?'Add a place to start':`${where} · ${auto?n+' a day':'schedule off'}`;
   // The list of places (only drawn again when it changed, so a click in it is never lost)
   const key=JSON.stringify([places,w.selected]);
   if(key!==wxPlacesShown){
@@ -1457,9 +1478,9 @@ async function showPrinted(t){
   p.addEventListener('animationend',()=>p.classList.remove('in'),{once:true});
   printing=false; $('printBtn').disabled=false;
 }
-$('connList').addEventListener('click',e=>{
-  const b=e.target.closest('.mi'); if(!b)return;
-  toast('Coming soon');
+$('appGrid').addEventListener('click',e=>{
+  const b=e.target.closest('.app'); if(!b)return;
+  if(b.dataset.c==='weather')showConn(true); else toast('Coming soon');
 });
 $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 
