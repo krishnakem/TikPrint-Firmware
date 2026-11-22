@@ -14,7 +14,7 @@
 #define DATE_FORMAT "%b %d, %Y"     // e.g. "Nov 20, 2026" (strftime patterns)
 #define TIME_FORMAT "%I:%M %p %Z"   // e.g. "10:05 PM EST"
 
-void ticket_header_text(char *left, char *right)
+void ticket_header_text(char *left, char *right, bool with_location)
 {
     settings_t s;
     clock_status_t c;
@@ -36,8 +36,8 @@ void ticket_header_text(char *left, char *right)
     bool has_date = s.show_date && clock_format_now(date, sizeof(date), DATE_FORMAT);
     bool has_time = s.show_time && clock_format_now(time, sizeof(time), TIME_FORMAT);
 
-    snprintf(left, TICKET_HEADER_MAX, "TikPrint%s%s", s.show_location && location[0] ? " | " : "",
-             s.show_location ? location : "");
+    bool has_location = with_location && s.show_location && location[0];
+    snprintf(left, TICKET_HEADER_MAX, "TikPrint%s%s", has_location ? " | " : "", has_location ? location : "");
     right[0] = 0;
     if (has_date || has_time) {
         snprintf(right, TICKET_HEADER_MAX, "%s%s%s", has_date ? date : time, has_date && has_time ? " | " : "",

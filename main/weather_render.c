@@ -91,9 +91,10 @@ bool weather_render(ticket_canvas_t *c, int font, int size, int header_font, con
     }
     int y = 2;
 
-    // Header line: left half at the left edge, right half (in capitals, as the page draws it) at the right edge
+    // Header line: left half at the left edge, right half (in capitals, as the page draws it) at the right edge.
+    // No location in it: a weather ticket already says which place it is for.
     char left[TICKET_HEADER_MAX], right[TICKET_HEADER_MAX];
-    ticket_header_text(left, right);
+    ticket_header_text(left, right, false);
     for (char *p = right; *p; p++) {
         *p = (*p >= 'a' && *p <= 'z') ? (char)(*p - 'a' + 'A') : *p;
     }

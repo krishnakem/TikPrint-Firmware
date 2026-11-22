@@ -184,17 +184,18 @@ static void finish_ticket(void)
 /*
  * The header line of a ticket printed in the built-in font:
  *   TikPrint | Los Angeles  Nov 20, 2026 | 10:05 PM PST
- * Which parts appear is chosen in Settings (settings.c). Date and time come from the
+ * Which parts appear is chosen in Settings (settings.c); with_location = false leaves the
+ * location out anyway (weather tickets). Date and time come from the
  * board's clock and are left out while it isn't set. (Tickets from the web page carry
  * the same header inside their image, drawn by the page, or, when the header's font there
  * is "Receipt", as a small-font line of their layout: see headerLine in web/index.html.)
  */
-static void send_header(void)
+static void send_header(bool with_location)
 {
     // Left half and right half, as on tickets drawn by the page:
     //   TikPrint | Ann Arbor, MI                      Nov 20, 2026 | 10:05 PM EST
     char left[TICKET_HEADER_MAX], right[TICKET_HEADER_MAX];
-    ticket_header_text(left, right);
+    ticket_header_text(left, right, with_location);
     // Count characters, not bytes: an accented letter is stored as two bytes but prints as one.
     int used = 0;
     for (const char *p = left; *p; p++) {
@@ -287,7 +288,7 @@ static void send_job(const printer_job_t *job)
     // or for lines set in the page's "Receipt" font (send_layout above).
     bool image_on_top = job->image && job->image_rows && job->image_first && !job->text_in_image;
     if (!job->text_in_image) {
-        send_header();
+        send_header(!job->no_location);
         if (job->source[0]) {   // the ticket number is not printed
             send_text(job->source);
             send_text("\n");

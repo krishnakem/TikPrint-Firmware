@@ -23,6 +23,7 @@ typedef struct {
                             // (in its own font), so the printer must not print them again in its built-in font
     bool image_first;       // built-in font tickets only: print the image above the title (a weather symbol),
                             // not below the text, and with no blank footer after it
+    bool no_location;       // built-in font tickets only: leave the location out of the header line (weather tickets)
     const uint8_t *layout;  // optional: the ticket as a list of parts, see "Layout" below. NULL if none
     size_t layout_len;      // number of bytes in layout
 } printer_job_t;

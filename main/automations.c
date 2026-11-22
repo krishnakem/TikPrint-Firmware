@@ -127,7 +127,9 @@ static print_result_t weather_print(weather_kind_t kind, bool manual)
         weather_finished(manual, false, weather_result_name(res), weather_result_message(res), 0);
         result = (res == WEATHER_NO_WIFI || res == WEATHER_UNREACHABLE) ? PRINT_TRY_LATER : PRINT_FAILED;
     } else {
-        printer_job_t job = { .title = title, .body = body, .source = source };
+        // no_location: the header of a weather ticket leaves the location out (the drawn ticket does the same,
+        // in weather_render.c; this flag is for the printer's own font)
+        printer_job_t job = { .title = title, .body = body, .source = source, .no_location = true };
         bool drawn = font >= 0 && ticket_canvas_init(&canvas, WEATHER_RENDER_MAX_ROWS) &&
                      weather_render(&canvas, font, look.size, header_font >= 0 ? header_font : font, source, icon, title, rich);
         if (drawn) {
