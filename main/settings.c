@@ -2,6 +2,7 @@
  * Settings chosen in the web UI, saved on the board (NVS namespace "settings"):
  *   - the ticket header: the location text and which parts to show
  *   - automations: the ZIP code weather tickets are for
+ *   - firmware updates: whether beta builds are offered too
  *
  * The web server changes them and the printer reads them, on different tasks,
  * so the copy in memory is guarded by one lock (s_lock).
@@ -24,6 +25,7 @@ static const char *TAG = "settings";
 static SemaphoreHandle_t s_lock;
 static settings_t s_now = { .location = "", .show_location = true, .show_date = true, .show_time = true,
                             .header_font = DEFAULT_HEADER_FONT };
+static bool s_beta_updates;          // also offer beta builds of the firmware
 static settings_places_t s_places;   // the weather places; none until one is added
 static settings_weather_look_t s_weather_look = { .font = DEFAULT_HEADER_FONT, .size = 1, .hours = true };
 /* The weather schedule. Until it is changed: on, at 7:30 AM, 12:30 PM and 8:30 PM. */
@@ -137,6 +139,7 @@ esp_err_t settings_init(void)
         load_flag(h, "show_loc", &s_now.show_location);
         load_flag(h, "show_date", &s_now.show_date);
         load_flag(h, "show_time", &s_now.show_time);
+        load_flag(h, "beta_updates", &s_beta_updates);
         char font[SETTINGS_FONT_MAX];
         n = sizeof(font);
         if (nvs_get_str(h, "header_font", font, &n) == ESP_OK && font[0]) {
@@ -169,6 +172,31 @@ esp_err_t settings_init(void)
         nvs_close(h);
     }
     return ESP_OK;
+}
+
+/* ---------- Firmware updates ---------- */
+
+bool settings_get_beta_updates(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool on = s_beta_updates;
+    xSemaphoreGive(s_lock);
+    return on;
+}
+
+void settings_set_beta_updates(bool on)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_beta_updates = on;
+    xSemaphoreGive(s_lock);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "could not save \"beta_updates\"");
+        return;
+    }
+    nvs_set_u8(h, "beta_updates", on);
+    nvs_commit(h);
+    nvs_close(h);
 }
 
 /* ---------- Automations: weather ---------- */
