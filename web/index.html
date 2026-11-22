@@ -399,6 +399,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
     <div class="grp">
       <div class="kv"><span>Version</span><span id="setFw"></span></div>
       <button class="kv" id="fwCheck"><span id="fwCheckLabel">Check for updates</span><span class="say" id="fwCheckNote"></span></button>
+      <label class="kv" title="Also offer builds that are still being worked on"><span>Beta updates</span><input type="checkbox" class="sw" id="swBeta"></label>
       <button class="kv" id="fwBtn" hidden><span>Install from file</span><span class="go">›</span></button>
     </div>
     <input type="file" id="fwFile" accept=".bin,application/octet-stream" hidden>
@@ -847,6 +848,9 @@ document.addEventListener('click',e=>{if(!e.target.closest('.pop'))closeAll(null
      click: the board downloads the file from GitHub itself, checks it and restarts into it. This page shows
      the download, waits for the board to come back, then reloads itself so you get the new page too.
      The board also checks by itself once a day, so the dot can appear without anyone asking.
+   - "Beta updates": when on, the check also offers beta builds, such as v0.4.0-beta.7. Those are built from
+     work that is not finished yet, so it can be tried on the printer before it becomes a release. Flipping
+     the switch makes the board check again at once. Off = finished releases only.
    - "Install from file" (only shown over the USB cable) sends a firmware file from this computer instead,
      for trying a build that is not a release yet. Over Wi-Fi the board accepts nothing but a GitHub release.
    The question and the progress are shown as a "sheet" that takes over the Settings popover. */
@@ -872,6 +876,7 @@ function showFirmware(s){
   $('setFw').title=`Running from "${u.slot}"`;
   $('fwBtn').hidden=!viaUsb;
   $('gearBtn').classList.toggle('new',!!u.available);
+  if(!checking)$('swBeta').checked=!!u.beta;   // while a change is on its way, the switch stays where it was put
   const busy=u.state==='downloading'||u.state==='restarting';
   $('fwCheckLabel').textContent=busy?`Installing v${u.latest}`:u.available?`Update to v${u.latest}`:'Check for updates';
   $('fwCheckNote').innerHTML=
@@ -929,6 +934,23 @@ $('fwCheck').onclick=async()=>{
   if(problem)toast(problem);
   else if(now.available)askInstall();
   else toast(`v${s.version} is the latest`);
+};
+/* The "Beta updates" switch: tell the board, then follow the check it starts, as above. */
+$('swBeta').onchange=async e=>{
+  const want=e.target.checked, u=fw.up;
+  if(!u||checking||u.state!=='idle'){e.target.checked=!want; return}
+  checking=true; checkFailed=false; $('fwCheckNote').innerHTML='<span class="spin"></span>';
+  let r=null, s=null;
+  try{r=await api('/api/update/channel',{beta:want})}catch(e){}
+  if(r&&r.ok){do{await sleep(UPDATE_POLL_MS); s=await refreshStatus()}while(s&&s.update.state==='checking')}
+  checking=false;
+  if(!r||!r.ok){toast(r?r.message:'Can’t reach the printer'); if(!await refreshStatus())e.target.checked=!want; return}   // the status puts the switch back
+  if(!s){$('fwCheckNote').textContent='Couldn’t check'; return}
+  checkFailed=!!s.update.error;
+  showFirmware(s);
+  if(s.update.error)toast(s.update.error);
+  else if(s.update.available)askInstall();
+  else toast(want?'Beta updates on. Nothing newer yet':'Beta updates off');
 };
 function askInstall(){
   const v=fw.up.latest;
