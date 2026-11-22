@@ -29,11 +29,12 @@ typedef struct {
 
 /*
  * Layout: a ticket whose lines are partly image and partly text in the printer's built-in font
- * (the "Printer default" font on the page). It is a list of parts, printed top to bottom.
+ * (the "Receipt" font on the page). It is a list of parts, printed top to bottom.
  * Each part is a few bytes:
  *
  *   LAYOUT_ROWS, low, high              print the next (low + 256 * high) rows of the image
- *   LAYOUT_LINE, size, runs, then       print one line of text, size = 1..8 times the font's normal size.
+ *   LAYOUT_LINE, size, runs, then       print one line of text, size = 1..8 times the font's normal size,
+                                       or LAYOUT_SMALL: the printer's small font (the ticket header).
  *     runs times: style, len, text      A run is len bytes of text (UTF-8) in one style:
  *                                       style = 0, or LAYOUT_BOLD and/or LAYOUT_UNDERLINE added together
  *
@@ -46,6 +47,7 @@ typedef struct {
 #define LAYOUT_BOLD       0x01
 #define LAYOUT_UNDERLINE  0x02
 #define LAYOUT_MAX_SIZE   8      // largest text size the printer has
+#define LAYOUT_SMALL      0      // as a size: the small font, 9 dots wide instead of 12 (64 letters on a line)
 #define LAYOUT_MAX_RUN    255    // most bytes of text in one run (its length is stored in one byte)
 
 /** What a job was given when it joined the print queue. */

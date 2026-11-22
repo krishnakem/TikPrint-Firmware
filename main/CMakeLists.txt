@@ -37,7 +37,7 @@ endforeach()
 
 # --- Fonts the page draws ticket text with. Embedded as they are (woff2 is already compressed). ---
 # To add one: put the file in web/fonts, add its name here, in FONT_FILES in web_server.c,
-# and in FONTS in web/index.html. ("Printer default" in FONTS is not a file of its own: it is the printer's
+# and in FONTS in web/index.html. ("Receipt" in FONTS is not a file of its own: it is the printer's
 # built-in font, shown on screen with jetbrains-mono as a look-alike.)
 foreach(f "inter" "source-serif" "jetbrains-mono" "caveat" "nunito")
     target_add_binary_data(${COMPONENT_LIB} "${web_dir}/fonts/${f}.woff2" BINARY)

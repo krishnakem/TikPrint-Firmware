@@ -646,7 +646,7 @@ static esp_err_t wifi_forget_post(httpd_req_t *req)
  *      "text_in_image" means the page drew the text at the top of the image, in its own
  *      font. title/body/source are then only kept for the log and /api/last-ticket.
  *      "parts" is for tickets with lines in the printer's built-in font (the page's
- *      "Printer default" font): the ticket top to bottom, as image rows and lines of
+ *      "Receipt" font): the ticket top to bottom, as image rows and lines of
  *      text in turn (see build_layout). Those lines are then not in the image.
  *      The browser has already turned the picture or PDF into dots, 576 wide and
  *      pure black/white, so the board never has to decode JPG, PNG or PDF.
@@ -670,6 +670,7 @@ static esp_err_t print_fail(httpd_req_t *req, const char *error, const char *mes
  *   {"rows": 120}                                             the next 120 rows of the image
  *   {"size": 2, "runs": [{"text": "Total", "bold": true},     one line in the printer's built-in font,
  *                        {"text": " 5.00", "underline": true}]}   size = 1..8 times its normal size
+ *   {"small": true, "runs": [{"text": "TikPrint | ..."}]}     one line in the printer's small font (the header)
  * Returns NULL if the parts are not in that form, or ask for more image rows than there are.
  * The result never needs more than max_len bytes (it is shorter than the JSON it came from). free() it.
  */
@@ -698,12 +699,13 @@ static uint8_t *build_layout(const cJSON *parts, int image_rows, size_t max_len,
         }
         const cJSON *jsize = cJSON_GetObjectItem(part, "size");
         int size = cJSON_IsNumber(jsize) ? jsize->valueint : 1;
+        bool small = cJSON_IsTrue(cJSON_GetObjectItem(part, "small"));
         int runs = cJSON_IsArray(jruns) ? cJSON_GetArraySize(jruns) : -1;
         if (size < 1 || size > LAYOUT_MAX_SIZE || runs < 0 || runs > 255 || n + 3 > max_len) {
             goto bad;
         }
         out[n++] = LAYOUT_LINE;
-        out[n++] = (uint8_t)size;
+        out[n++] = small ? LAYOUT_SMALL : (uint8_t)size;
         out[n++] = (uint8_t)runs;
         const cJSON *run;
         cJSON_ArrayForEach(run, jruns) {

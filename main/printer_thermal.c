@@ -186,7 +186,8 @@ static void finish_ticket(void)
  *   TikPrint | Los Angeles  Nov 20, 2026 | 10:05 PM PST
  * Which parts appear is chosen in Settings (settings.c). Date and time come from the
  * board's clock and are left out while it isn't set. (Tickets from the web page carry
- * the same header inside their image, drawn by the page.)
+ * the same header inside their image, drawn by the page, or, when the header's font there
+ * is "Receipt", as a small-font line of their layout: see headerLine in web/index.html.)
  */
 static void send_header(void)
 {
@@ -240,6 +241,11 @@ static void send_layout(const printer_job_t *job)
         }
         uint8_t size = p[1], runs = p[2];   // LAYOUT_LINE
         p += 3;
+        bool small = size == LAYOUT_SMALL;  // the ticket header: normal size, but in the small font
+        if (small) {
+            size = 1;
+            CMD("\x1BM\x01");               // ESC M 1: small font (9 dots wide instead of 12)
+        }
         const char set_size[] = { 0x1D, '!', (char)(((size - 1) << 4) | (size - 1)) };
         send(set_size, sizeof(set_size));
         for (uint8_t i = 0; i < runs; i++) {
@@ -254,6 +260,9 @@ static void send_layout(const printer_job_t *job)
             send_text(" ");   // an empty line: the space makes the printer feed a line of this text size
         }
         send_text("\n");
+        if (small) {
+            CMD("\x1BM\x00");               // ESC M 0: back to the normal font
+        }
     }
     CMD("\x1D!\x00" "\x1B" "E\x00" "\x1B-\x00");   // back to normal size, no bold, no underline
     if (job->image && row < job->image_rows) {         // rows no part asked for: the file under the text
@@ -275,7 +284,7 @@ static void send_job(const printer_job_t *job)
 
     // Normally the page has drawn the text into the image, in the font picked there.
     // The printer's built-in font is only used when it hasn't (e.g. a ticket sent with curl),
-    // or for lines set in the page's "Printer default" font (send_layout above).
+    // or for lines set in the page's "Receipt" font (send_layout above).
     bool image_on_top = job->image && job->image_rows && job->image_first && !job->text_in_image;
     if (!job->text_in_image) {
         send_header();
