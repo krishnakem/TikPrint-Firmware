@@ -22,6 +22,7 @@
 #include "connectors.h"
 #include "cloud_state.h"
 #include "cloud_identity.h"
+#include "cloud.h"
 
 static const char *TAG = "tikprint";
 
@@ -55,6 +56,7 @@ void app_main(void)
     net_name_start(usb_net_get_netif());  // not fatal: the IP address still works without it
     ESP_ERROR_CHECK(wifi_mgr_start());
     ESP_ERROR_CHECK(cloud_identity_init());   // after Wi-Fi: making the secret needs the radio's random numbers; calls nobody
+    ESP_ERROR_CHECK(cloud_init());            // calls nobody either: the first call is made when Upgrade is pressed
     ESP_ERROR_CHECK(web_server_start());
     // Last, so that freshly updated firmware is only kept if everything above started.
     ESP_ERROR_CHECK(fw_update_init());

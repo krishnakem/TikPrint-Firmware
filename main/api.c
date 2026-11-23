@@ -21,6 +21,7 @@
  *   POST /api/connectors            set up, switch or disconnect the connector; its schedule and look (see connectors_post)
  *   POST /api/connectors/print-now  fetch the active connector's list and print it now
  *   GET  /api/cloud/status   whether this printer is linked to TikPrint Cloud, and where the cloud is
+ *   POST /api/cloud/pair     "Upgrade" was pressed: get a pairing code from the cloud and print the ticket to scan
  */
 #include <string.h>
 #include <stdlib.h>
@@ -48,6 +49,7 @@
 #include "automations.h"
 #include "connectors.h"
 #include "cloud_state.h"
+#include "cloud.h"
 #include "config.h"
 #include "zip_table.h"
 #include "city_table.h"
@@ -1586,20 +1588,63 @@ static esp_err_t connectors_print_now_post(httpd_req_t *req)
 
 /* ---------- GET /api/cloud/status ----------
  * Whether this printer is linked to TikPrint Cloud ("Pro"), for the page's Pro buttons:
- *   {"linked":false,"cloud_url":"https://..."}
- *   {"linked":true,"printer_id":"...","cloud_url":"https://..."}
- * It only reads what the board has saved: nothing is asked of the cloud.
+ *   {"linked":false,"state":"local","cloud_url":"https://..."}
+ *   {"linked":false,"state":"pairing","code":"K7QM-3XPD","expires_in_s":512,"cloud_url":"https://..."}
+ *   {"linked":true,"state":"linked","printer_id":"...","cloud_url":"https://..."}
+ * "state" is where linking stands (see cloud_phase_t in cloud.h): "local", "starting" (getting a code),
+ * "pairing" (the ticket is out: "code" is the code on it), "linked", "expired" (nobody confirmed in
+ * time) or "failed" ("message" says why).
+ * It only reads what the board knows: nothing is asked of the cloud.
  * The device token is never sent back. */
 static esp_err_t cloud_status_get(httpd_req_t *req)
 {
     char printer_id[CLOUD_PRINTER_ID_MAX];
     bool linked = cloud_state_get_printer_id(printer_id, sizeof(printer_id));
+    cloud_status_t st;
+    cloud_get_status(&st);
+    // The saved token decides: "linked" is never said without one, nor anything else with one.
+    cloud_phase_t phase = linked ? CLOUD_LINKED : st.phase == CLOUD_LINKED ? CLOUD_LOCAL : st.phase;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "linked", linked);
+    cJSON_AddStringToObject(root, "state", cloud_phase_name(phase));
+    if (phase == CLOUD_PAIRING) {
+        cJSON_AddStringToObject(root, "code", st.code);
+        cJSON_AddNumberToObject(root, "expires_in_s", st.expires_in_s);
+    }
+    if (phase == CLOUD_FAILED) {
+        cJSON_AddStringToObject(root, "message", st.message);
+    }
     if (linked && printer_id[0]) {
         cJSON_AddStringToObject(root, "printer_id", printer_id);
     }
     cJSON_AddStringToObject(root, "cloud_url", cloud_state_get_cloud_url());
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/cloud/pair ----------
+ * "Upgrade to Pro" was pressed on the page of a printer that is not linked. This is the one thing
+ * that makes a printer call the cloud for the first time: it asks for a pairing code and prints a
+ * ticket with a QR code to scan. Replies {"ok":true} at once; how it goes shows up in
+ * /api/cloud/status ("state": starting, then pairing, then linked / expired / failed). */
+static esp_err_t cloud_pair_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    wifi_mgr_status_t w;
+    wifi_mgr_get_status(&w);
+    if (!w.connected) {
+        return refuse(req, "409 Conflict", "no_wifi", "Connect the printer to Wi-Fi first");
+    }
+    esp_err_t err = cloud_pair();
+    if (err == ESP_ERR_INVALID_STATE) {
+        return refuse(req, "409 Conflict", "already_linked", "This printer is already linked");
+    }
+    if (err != ESP_OK) {
+        return refuse(req, "500 Internal Server Error", "no_memory", "The printer is out of memory");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
     return send_json(req, root);
 }
 
@@ -1659,6 +1704,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/connectors", .method = HTTP_POST, .handler = connectors_post },
         { .uri = "/api/connectors/print-now", .method = HTTP_POST, .handler = connectors_print_now_post },
         { .uri = "/api/cloud/status", .method = HTTP_GET, .handler = cloud_status_get },
+        { .uri = "/api/cloud/pair", .method = HTTP_POST, .handler = cloud_pair_post },
 #if CLOUD_DEBUG_FAKE_LINK
         { .uri = "/api/cloud/debug-link", .method = HTTP_POST, .handler = cloud_debug_link_post },
 #endif
