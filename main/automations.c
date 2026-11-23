@@ -1,6 +1,5 @@
 /*
- * Automations: tickets the board makes by itself: the weather, and the active connector's
- * list (connectors.c).
+ * Automations: tickets the board makes by itself. Today that is the weather.
  *
  * Fetching from the internet takes seconds and needs a deep stack, and the web server must
  * keep answering meanwhile. So all of it happens on one background task here. Others hand it
@@ -25,7 +24,6 @@
 
 #include "automations.h"
 #include "clock.h"
-#include "connectors.h"
 #include "printer.h"
 #include "settings.h"
 #include "ticket_draw.h"
@@ -43,7 +41,7 @@ static const char *TAG = "automations";
 #define SLOT_RETRY_MS    60000   // ... trying this often
 #define NVS_NS           "auto"
 
-typedef enum { JOB_WEATHER_LOCATE, JOB_WEATHER_PRINT, JOB_WEATHER_SLOT, JOB_CONNECTOR_PRINT } job_type_t;
+typedef enum { JOB_WEATHER_LOCATE, JOB_WEATHER_PRINT, JOB_WEATHER_SLOT } job_type_t;
 
 typedef struct {
     job_type_t type;
@@ -265,27 +263,11 @@ static void automations_task(void *arg)
             weather_print(job.kind, true);
         } else if (got_job && job.type == JOB_WEATHER_SLOT) {
             weather_print(SLOT_KIND[job.slot], false);   // a test of a scheduled print
-        } else if (got_job && job.type == JOB_CONNECTOR_PRINT) {
-            connectors_print(true);
         } else if (got_job || locate_tries_left > 0) {
             locate_tries_left = locate(got_job ? LOCATE_RETRIES : locate_tries_left);   // a new ZIP code starts afresh
         }
         schedule_check();
-        connectors_schedule_check();   // the active connector has its own schedule and daily limit (connectors.c)
     }
-}
-
-esp_err_t automations_connector_print_now(void)
-{
-    if (!connectors_begin_manual()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    job_t job = { .type = JOB_CONNECTOR_PRINT };
-    if (xQueueSend(s_jobs, &job, 0) != pdTRUE) {
-        connectors_cancel_manual();
-        return ESP_ERR_INVALID_STATE;
-    }
-    return ESP_OK;
 }
 
 void automations_weather_slot_changed(int slot)

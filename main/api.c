@@ -18,10 +18,8 @@
  *   POST /api/update         install firmware from a file. Only over the USB cable (see update_post)
  *   POST /api/automations/weather            {"zip": "48104"}: the ZIP code weather tickets are for
  *   POST /api/automations/weather/print-now  fetch the weather and print it now ({"kind": "today"|"rest"|"tomorrow"}, optional)
- *   POST /api/connectors            set up, switch or disconnect the connector; its schedule and look (see connectors_post)
- *   POST /api/connectors/print-now  fetch the active connector's list and print it now
  *   GET  /api/cloud/status   whether this printer is linked to TikPrint Cloud, and where the cloud is (never the pairing code)
- *   POST /api/cloud/pair     "Upgrade" was pressed: get a pairing code from the cloud and print the ticket to scan
+ *   POST /api/cloud/pair     "TikPrint Cloud" was pressed: get a pairing code from the cloud and print the ticket to scan
  *   POST /api/cloud/unlink   "Reset / Unlink" was pressed: print a ticket with a 6-digit code. Nothing is unlinked yet
  *   POST /api/cloud/unlink/confirm  {"code": "482905"}: the code from that ticket. Delete the device token and tell the cloud
  *
@@ -51,7 +49,6 @@
 #include "fw_github.h"
 #include "fw_update.h"
 #include "automations.h"
-#include "connectors.h"
 #include "cloud_state.h"
 #include "cloud.h"
 #include "cloud_http.h"
@@ -265,7 +262,7 @@ static void add_settings(cJSON *root)
     cJSON_AddStringToObject(set, "header_font", s.header_font);
 }
 
-/* The schedule of three prints a day, as the page gets it (weather and connectors use the same form):
+/* The schedule of three prints a day, as the page gets it :
  *   {"on":true,"max_per_day":3,"slots":[{"time":"07:30","on":true}, ...]}
  * Returns the "slots" array, so that the caller can add to each slot. */
 static cJSON *add_schedule(cJSON *to, const settings_weather_schedule_t *sched, int max_per_day)
@@ -285,64 +282,6 @@ static cJSON *add_schedule(cJSON *to, const settings_weather_schedule_t *sched, 
     return slots;
 }
 
-/* The "connectors" part of "automations" in /api/status (see connectors.h for the rules):
- *   {"available":["todoist"],            the apps this firmware has
- *    "active":"todoist",                 "" = none set up
- *    "fields":[{"set":true,"tail":"9f3c"}],   what was pasted in: only whether it is there and its last 4 characters.
- *                                             The token itself is never sent back.
- *    "switch":{"needed":true,"locked":false,"in_days":0,"clock_set":true},
- *         needed = setting up a different app now counts as a switch; locked = one was made too recently,
- *         in_days = how long until the next may be made (1 = tomorrow)
- *    "schedule":{..., "printed_today":1}, "look":{"font":"Inter","size":1},
- *    "busy":false, "last":null | {"ok","error","message","ticket","s_ago"}}     as for weather */
-static void add_connectors(cJSON *automations)
-{
-    connectors_status_t st;
-    settings_weather_schedule_t sched;
-    connectors_look_t look;
-    connectors_get_status(&st);
-    connectors_get_schedule(&sched);
-    connectors_get_look(&look);
-    const connector_t *active = connectors_find(st.active);
-
-    cJSON *conn = cJSON_AddObjectToObject(automations, "connectors");
-    cJSON *available = cJSON_AddArrayToObject(conn, "available");
-    for (int i = 0; connectors_at(i); i++) {
-        cJSON_AddItemToArray(available, cJSON_CreateString(connectors_at(i)->id));
-    }
-    cJSON_AddStringToObject(conn, "active", st.active);
-    cJSON *fields = cJSON_AddArrayToObject(conn, "fields");
-    for (int i = 0; active && i < active->fields; i++) {
-        cJSON *field = cJSON_CreateObject();
-        cJSON_AddBoolToObject(field, "set", st.field_set[i]);
-        cJSON_AddStringToObject(field, "tail", st.field_tail[i]);
-        cJSON_AddItemToArray(fields, field);
-    }
-    cJSON *sw = cJSON_AddObjectToObject(conn, "switch");
-    cJSON_AddBoolToObject(sw, "needed", st.had_one);
-    cJSON_AddBoolToObject(sw, "locked", st.switch_locked);
-    cJSON_AddNumberToObject(sw, "in_days", st.switch_in_days);
-    cJSON_AddBoolToObject(sw, "clock_set", st.clock_set);
-    add_schedule(conn, &sched, CONNECTORS_MAX_PER_DAY);
-    cJSON_AddNumberToObject(cJSON_GetObjectItem(conn, "schedule"), "printed_today", st.printed_today);
-    cJSON *jlook = cJSON_AddObjectToObject(conn, "look");
-    cJSON_AddStringToObject(jlook, "font", look.font);
-    cJSON_AddNumberToObject(jlook, "size", look.size);
-    cJSON_AddBoolToObject(conn, "busy", st.busy);
-    if (!st.ran) {
-        cJSON_AddNullToObject(conn, "last");
-        return;
-    }
-    cJSON *last = cJSON_AddObjectToObject(conn, "last");
-    cJSON_AddBoolToObject(last, "ok", st.ok);
-    cJSON_AddStringToObject(last, "error", st.error);
-    cJSON_AddStringToObject(last, "message", st.message);
-    if (st.ok) {
-        cJSON_AddNumberToObject(last, "ticket", st.ticket);
-    }
-    cJSON_AddNumberToObject(last, "s_ago", st.s_ago);
-}
-
 /* The "automations" part of /api/status:
  *   {"weather":{"zip":"48104","place":"Ann Arbor, MI","busy":false,
  *               "last":{"ok":true,"error":"","message":"","ticket":42,"s_ago":12}}}
@@ -360,7 +299,6 @@ static void add_automations(cJSON *root)
     const settings_place_t *now = pl.count ? &pl.place[pl.selected] : NULL;
 
     cJSON *automations = cJSON_AddObjectToObject(root, "automations");
-    add_connectors(automations);
     cJSON *weather = cJSON_AddObjectToObject(automations, "weather");
     // The selected place: "zip" is "" if it was added by town name, "place" is "" while a ZIP code's town is not known yet.
     cJSON_AddStringToObject(weather, "zip", now ? now->zip : "");
@@ -1491,125 +1429,6 @@ static esp_err_t weather_print_now_post(httpd_req_t *req)
     return send_json(req, root);
 }
 
-/* ---------- POST /api/connectors ----------
- * Everything about the one connector the free plan allows. Every part is optional:
- *   {"connect": "todoist", "fields": ["<token>"]}    set it up (or paste a new token for the active one)
- *   {"connect": "github", "fields": [...], "switch": true}   replace the active connector with another app
- *   {"disconnect": true}                             erase the token
- *   {"on": true, "slots": [{"time": "08:00", "on": true}, ...]}   the schedule, as for weather
- *   {"font": "Inter", "size": 1}                     how its tickets look
- * The rules are in connectors.h. A request they forbid is refused with one of:
- *   "connector_limit"  another connector is active (send "switch": true to replace it)
- *   "switch_locked"    a switch was already made too recently
- *   "clock_not_set"    a switch needs the time, and the board does not know it yet
- * Replies {"ok":true,"automations":{...}} as /api/status has it. The token is never sent back. */
-static esp_err_t connectors_post(httpd_req_t *req)
-{
-    if (!request_is_same_site(req)) {
-        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
-    }
-    cJSON *body = read_json_body(req);
-    if (!body) {
-        return ESP_OK;
-    }
-    const char *status = "400 Bad Request", *problem = NULL, *problem_text = NULL;
-
-    // The look and the schedule are checked first: nothing is changed unless everything sent was right.
-    const cJSON *jfont = cJSON_GetObjectItem(body, "font"), *jsize = cJSON_GetObjectItem(body, "size");
-    connectors_look_t look;
-    connectors_get_look(&look);
-    bool font_ok = !jfont || (cJSON_IsString(jfont) && (ticket_font_id(jfont->valuestring) >= 0 ||
-                                                          strcmp(jfont->valuestring, "Printer") == 0));
-    bool size_ok = !jsize || (cJSON_IsNumber(jsize) && jsize->valueint >= 0 && jsize->valueint <= 2);
-    if (!font_ok || !size_ok) {
-        problem = "bad_look";
-        problem_text = "That is not a font or size the printer has";
-    } else {
-        if (jfont) {
-            strlcpy(look.font, jfont->valuestring, sizeof(look.font));
-        }
-        look.size = jsize ? (uint8_t)jsize->valueint : look.size;
-    }
-    settings_weather_schedule_t sched;
-    connectors_get_schedule(&sched);
-    if (!problem && !read_schedule(cJSON_GetObjectItem(body, "on"), cJSON_GetObjectItem(body, "slots"), &sched)) {
-        problem = "bad_schedule";
-        problem_text = "That is not a schedule the printer understands";
-    }
-
-    const cJSON *jconnect = cJSON_GetObjectItem(body, "connect"), *jfields = cJSON_GetObjectItem(body, "fields");
-    if (!problem && jconnect) {
-        const char *field[CONN_FIELDS_MAX] = { 0 };
-        for (int i = 0; i < CONN_FIELDS_MAX; i++) {
-            const cJSON *f = cJSON_GetArrayItem(jfields, i);
-            field[i] = cJSON_IsString(f) ? f->valuestring : NULL;
-        }
-        conn_set_result_t res = connectors_connect(cJSON_IsString(jconnect) ? jconnect->valuestring : "", field,
-                                                   cJSON_IsTrue(cJSON_GetObjectItem(body, "switch")));
-        switch (res) {
-        case CONN_SET_OK:
-            break;
-        case CONN_SET_UNKNOWN:
-            problem = "unknown_connector";
-            problem_text = "This printer does not have that connector";
-            break;
-        case CONN_SET_BAD_FIELDS:
-            problem = "bad_fields";
-            problem_text = "That does not look like a token. Copy it again, with no spaces";
-            break;
-        case CONN_SET_LIMIT:
-            status = "409 Conflict";
-            problem = "connector_limit";
-            problem_text = "The free plan runs one connector at a time. Switch to this one, or upgrade to Pro";
-            break;
-        case CONN_SET_LOCKED:
-            status = "409 Conflict";
-            problem = "switch_locked";
-            problem_text = "The connector was already switched today. Switch again tomorrow, or upgrade to Pro";
-            break;
-        default:
-            status = "409 Conflict";
-            problem = "clock_not_set";
-            problem_text = "The printer does not know the time yet, so it cannot switch connectors. Keep this page open a moment";
-            break;
-        }
-    } else if (!problem && cJSON_IsTrue(cJSON_GetObjectItem(body, "disconnect"))) {
-        connectors_disconnect();
-    }
-    cJSON_Delete(body);   // the token in it is gone with it
-    if (problem) {
-        return refuse(req, status, problem, problem_text);
-    }
-    connectors_set_look(&look);
-    connectors_set_schedule(&sched);
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    add_automations(root);
-    return send_json(req, root);
-}
-
-/* ---------- POST /api/connectors/print-now ----------
- * Fetch the active connector's list and print it now. Replies {"ok":true} at once; how it went
- * shows up in /api/status ("automations": "connectors": "busy", then "last").
- * A manual print: it does not count towards the limit on scheduled prints. */
-static esp_err_t connectors_print_now_post(httpd_req_t *req)
-{
-    if (!request_is_same_site(req)) {
-        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
-    }
-    connectors_status_t st;
-    connectors_get_status(&st);
-    if (!st.active[0]) {
-        return refuse(req, "409 Conflict", "no_token", conn_result_message(CONN_NO_TOKEN));
-    }
-    if (automations_connector_print_now() != ESP_OK) {
-        return refuse(req, "409 Conflict", "busy", "The printer is still getting the last ticket");
-    }
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    return send_json(req, root);
-}
-
 /*
  * ---------- TikPrint Cloud: who may link and unlink ----------
  * Everything under /api is open to everyone on the same Wi-Fi. request_is_same_site() only keeps
@@ -1638,7 +1457,7 @@ static esp_err_t refuse_too_soon(httpd_req_t *req, int wait_s)
 }
 
 /* ---------- GET /api/cloud/status ----------
- * Whether this printer is linked to TikPrint Cloud ("Pro"), for the page's Pro buttons:
+ * Whether this printer is linked to TikPrint Cloud, for the page's TikPrint Cloud buttons:
  *   {"linked":false,"state":"local","cloud_url":"https://..."}
  *   {"linked":false,"state":"pairing","expires_in_s":512,"cloud_url":"https://..."}
  *   {"linked":true,"state":"linked","printer_id":"...","cloud_url":"https://..."}
@@ -1649,7 +1468,7 @@ static esp_err_t refuse_too_soon(httpd_req_t *req, int wait_s)
  * otherwise link the printer to an account of their own without ever seeing the printer.
  * Every answer also says what the board has been doing, so it can be checked without a serial cable:
  *   "calls_since_boot"  calls sent to TikPrint Cloud since the board started. A printer that is not
- *                       linked, and where nobody pressed Upgrade, stays at 0 however long it runs
+ *                       linked, and where nobody pressed the TikPrint Cloud button, stays at 0 however long it runs
  *   "last_call"         the newest one: "pair/start", "pair/status", "jobs", "jobs/body", "jobs/ack",
  *                       "unlink"; null if there has been none
  *   "last_error"        how the newest one failed: "timeout", "no_connection", "http_503", the cloud's own
@@ -1690,7 +1509,7 @@ static esp_err_t cloud_status_get(httpd_req_t *req)
 }
 
 /* ---------- POST /api/cloud/pair ----------
- * "Upgrade to Pro" was pressed on the page of a printer that is not linked. This is the one thing
+ * "TikPrint Cloud" was pressed on the page of a printer that is not linked. This is the one thing
  * that makes a printer call the cloud for the first time: it asks for a pairing code and prints a
  * ticket with a QR code to scan. Replies {"ok":true} at once; how it goes shows up in
  * /api/cloud/status ("state": starting, then pairing, then linked / expired / failed).
@@ -1858,8 +1677,6 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/automations/weather/print-now", .method = HTTP_POST, .handler = weather_print_now_post },
         { .uri = "/api/automations/places/search", .method = HTTP_POST, .handler = places_search_post },
         { .uri = "/api/automations/weather/run-slot", .method = HTTP_POST, .handler = weather_run_slot_post },
-        { .uri = "/api/connectors", .method = HTTP_POST, .handler = connectors_post },
-        { .uri = "/api/connectors/print-now", .method = HTTP_POST, .handler = connectors_print_now_post },
         { .uri = "/api/cloud/status", .method = HTTP_GET, .handler = cloud_status_get },
         { .uri = "/api/cloud/pair", .method = HTTP_POST, .handler = cloud_pair_post },
         { .uri = "/api/cloud/unlink", .method = HTTP_POST, .handler = cloud_unlink_post },

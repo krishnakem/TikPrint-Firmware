@@ -81,6 +81,6 @@ int main(int argc, char **argv)
     return 0;
 }
 
-/* Names connectors.c would give; only the words are needed here. */
+/* What went wrong, in words. */
 const char *conn_result_name(conn_result_t r) { return r == CONN_OK ? "ok" : "bad_answer"; }
 const char *conn_result_message(conn_result_t r) { return r == CONN_OK ? "" : "The app answered with something the printer cannot read"; }

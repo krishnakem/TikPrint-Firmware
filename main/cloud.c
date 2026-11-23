@@ -27,7 +27,9 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -50,8 +52,10 @@ static const char *TAG = "cloud";
 #define PAIR_EVERY_S     3       // "am I linked yet?" this often, unless the cloud says otherwise
 #define PAIR_LIFETIME_S  600     // how long a pairing code is good for, unless the cloud says otherwise
 #define PAIR_GRACE_S     20      // keep asking this long after the code should have run out: the cloud has the last word
-#define POLL_EVERY_S     10      // check in for jobs this often, unless the cloud says otherwise
-#define POLL_SLOWEST_S   60      // when the cloud cannot be reached, the wait doubles each time, up to this
+#define POLL_EVERY_S     10      // check in for jobs this often when the cloud's answer does not say how often
+#define POLL_FASTEST_S   5       // what the cloud asks for ("next_poll_seconds") is kept within these two
+#define POLL_SLOWEST_S   600     // ... and when the cloud cannot be reached, the wait doubles each time, up to this
+#define POLL_RETRY_MIN_S 10      // after a check-in that failed, never try again sooner than this
 #define DOWNLOAD_TRIES   5       // a print body that will not download is given up on after this many check-ins
 
 #define MSG_UNREACHABLE "Can't reach TikPrint Cloud. Check the Wi-Fi."
@@ -63,7 +67,7 @@ static SemaphoreHandle_t s_lock;      // guards everything below
 static SemaphoreHandle_t s_wake;      // given whenever the task should look again
 static cloud_status_t s_status;
 static bool s_task_running;
-static bool s_want_pair;              // Upgrade was pressed
+static bool s_want_pair;              // the TikPrint Cloud button was pressed on a printer that is not linked
 static bool s_want_unlink;            // Reset / Unlink was pressed: tell the cloud, with s_unlink_token
 static char s_unlink_token[CLOUD_TOKEN_MAX];   // the token that was just deleted, kept only until the cloud has been told
 static char s_pair_code[CLOUD_CODE_MAX];   // while pairing: the code on the ticket. It never leaves this file
@@ -78,7 +82,7 @@ static uint32_t s_done_ticket;        // which ticket it is about (s_in_queue.ti
 static esp_err_t s_done_result;       // ESP_OK = printed
 
 /* The rest is only touched by the cloud task. */
-static int s_poll_every_s = POLL_EVERY_S;
+static int s_poll_every_s = POLL_EVERY_S;   // what the last good answer said: the cloud picks it, and may change it every time
 static int s_poll_failures;           // check-ins in a row that got no answer
 static struct {
     bool active;                      // a cloud job is in the print queue (waiting or printing)
@@ -195,7 +199,7 @@ static bool code_is_plain(const char *code)
     return true;
 }
 
-/* Upgrade was pressed: get a code and print the ticket. This is the first call a printer ever makes. */
+/* The TikPrint Cloud button was pressed: get a code and print the ticket. This is the first call a printer ever makes. */
 static void pair_start(void)
 {
     cloud_reply_t reply;
@@ -216,7 +220,7 @@ static void pair_start(void)
         s_pair_until_us = esp_timer_get_time() + (int64_t)lifetime_s * 1000000;
         xSemaphoreGive(s_lock);
         // The ticket is the only place the code is shown. If it cannot join the print queue (queue
-        // full, no memory) there is nothing to scan, so pairing stops here and Upgrade starts it again.
+        // full, no memory) there is nothing to scan, so pairing stops here and the TikPrint Cloud button starts it again.
         esp_err_t err = cloud_ticket_print(link, code, (lifetime_s + 30) / 60);
         if (err == ESP_OK) {
             set_phase(CLOUD_PAIRING, code, NULL);
@@ -261,7 +265,7 @@ static void pair_ask(void)
     } else if (reply.status == 409 && cloud_state_is_linked()) {
         set_phase(CLOUD_LINKED, NULL, NULL);   // "already_linked", and the token is here: all is well
     } else if (reply.status == 404 || reply.status == 409) {
-        // unknown_code, unknown_device, or linked with a token this board never got: start over with Upgrade
+        // unknown_code, unknown_device, or linked with a token this board never got: start over with the TikPrint Cloud button
         ESP_LOGW(TAG, "pair/status: %d %s", reply.status, error);
         set_phase(CLOUD_EXPIRED, NULL, NULL);
     } else if (reply.status == 400 || reply.status == 401) {
@@ -279,7 +283,7 @@ static void pair_ask(void)
 
 /* The cloud says this token is not valid any more: the owner unlinked the printer on the website,
  * or linked it again elsewhere. Delete the token and go back to local only: from here the board
- * calls nobody until Upgrade is pressed again. */
+ * calls nobody until the TikPrint Cloud button is pressed again. */
 static void go_local(const char *why)
 {
     ESP_LOGW(TAG, "%s: token deleted, back to local only", why);
@@ -468,13 +472,18 @@ static int check_in(void)
     cloud_reply_free(&reply);
     if (!json) {
         // No network, a timeout, a 5xx, a 429, an answer that is not JSON: nothing is wrong with the
-        // link. Keep the token and try again, a little later each time.
+        // link. Keep the token and try again, a little later each time. The first wait is what the
+        // last good answer said (never sooner than that, and never sooner than POLL_RETRY_MIN_S).
         s_poll_failures = s_poll_failures < 8 ? s_poll_failures + 1 : 8;
-        int wait = s_poll_every_s << (s_poll_failures - 1);
+        int wait = (s_poll_every_s > POLL_RETRY_MIN_S ? s_poll_every_s : POLL_RETRY_MIN_S) << (s_poll_failures - 1);
         return wait > POLL_SLOWEST_S ? POLL_SLOWEST_S : wait;
     }
     s_poll_failures = 0;
-    s_poll_every_s = number_of(json, "poll_interval_s", POLL_EVERY_S, 3, 300);
+    // How long to wait before the next check-in: the cloud says, in every answer ("next_poll_seconds").
+    // Servers from before that only send "poll_interval_s". Neither there: POLL_EVERY_S.
+    s_poll_every_s = number_of(json, "next_poll_seconds",
+                               number_of(json, "poll_interval_s", POLL_EVERY_S, POLL_FASTEST_S, POLL_SLOWEST_S),
+                               POLL_FASTEST_S, POLL_SLOWEST_S);
 
     bool linked = true, more_to_report = false;
     const cJSON *job;
@@ -646,11 +655,11 @@ static void cloud_task(void *arg)
         } else if (phase == CLOUD_LINKED) {
             int wait = check_in();
             if (wait > 0) {
-                wait_s(wait);   // or until the ticket has printed, or Upgrade is pressed
+                wait_s(wait);   // or until the ticket has printed, Wi-Fi comes back, or a button on the page is pressed
             }
         } else {
             // Nothing left to do: close the connection and end the task. From here the board calls
-            // nobody, until Upgrade is pressed again.
+            // nobody, until the TikPrint Cloud button is pressed again.
             cloud_http_close();
             xSemaphoreTake(s_lock, portMAX_DELAY);
             if (!s_want_pair && !s_want_unlink) {
@@ -685,7 +694,7 @@ esp_err_t cloud_pair(int *wait_s)
     }
     int64_t now_us = esp_timer_get_time();
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    // Every Upgrade prints a ticket, and anyone on the network can press it: not too often.
+    // Every press prints a ticket, and anyone on the network can press it: not too often.
     *wait_s = ticket_wait_s(s_pair_asked_us, now_us);
     if (*wait_s > 0) {
         xSemaphoreGive(s_lock);
@@ -703,6 +712,13 @@ esp_err_t cloud_pair(int *wait_s)
     return err;
 }
 
+/* Wi-Fi is back (the board got an address): check in now, not when a long wait is over. This only
+ * wakes the cloud task. On a printer that is not linked there is no task, so still nobody is called. */
+static void on_wifi_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    xSemaphoreGive(s_wake);
+}
+
 esp_err_t cloud_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
@@ -712,6 +728,10 @@ esp_err_t cloud_init(void)
     }
     s_pair_every_s = PAIR_EVERY_S;
     cloud_jobs_init();
+    esp_err_t heard = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_got_ip, NULL);
+    if (heard != ESP_OK) {
+        return heard;
+    }
     if (!cloud_state_is_linked()) {
         s_status.phase = CLOUD_LOCAL;   // no token: no task, no calls
         return ESP_OK;
