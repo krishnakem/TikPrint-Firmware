@@ -282,3 +282,13 @@ esp_err_t clock_init(void)
              s_tz_iana, s_tz_posix);
     return ESP_OK;
 }
+
+int32_t clock_day_number(int64_t unix_s)
+{
+    time_t t = (time_t)unix_s;
+    struct tm tm;
+    lock();
+    localtime_r(&t, &tm);
+    unlock();
+    return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
+}

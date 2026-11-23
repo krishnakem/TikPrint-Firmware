@@ -95,7 +95,7 @@ esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;  // browsers open several connections; recycle the oldest
-    config.max_uri_handlers = 32;
+    config.max_uri_handlers = 40;
     config.stack_size = 8192;        // Wi-Fi scan + JSON building need more than the default
 
     httpd_handle_t server = NULL;

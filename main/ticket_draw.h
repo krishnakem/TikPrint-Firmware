@@ -42,3 +42,10 @@ void ticket_canvas_free(ticket_canvas_t *canvas);
 
 /** Draw text with its top-left corner at (x, y). Dots outside the canvas are left out. Returns the x after the text. */
 int ticket_draw_text(ticket_canvas_t *canvas, const ticket_face_t *face, int x, int y, const char *text, size_t len);
+
+/** Draw text starting at x, breaking it between words so it stays on the paper. Every line starts at x.
+ *  Moves *y below the last line. */
+void ticket_draw_wrapped(ticket_canvas_t *canvas, const ticket_face_t *face, int x, int *y, const char *text, size_t len);
+
+/** Draw text so that it ends at x_right. */
+void ticket_draw_right(ticket_canvas_t *canvas, const ticket_face_t *face, int x_right, int y, const char *text, size_t len);
