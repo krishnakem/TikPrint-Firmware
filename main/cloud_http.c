@@ -48,50 +48,94 @@ void cloud_http_close(void)
     }
 }
 
-/* Send the request on the open connection, or on a new one. ESP_OK = an answer came (any status). */
+static esp_http_client_handle_t new_client(const char *url)
+{
+    char agent[48];
+    snprintf(agent, sizeof(agent), "TikPrint/%s", esp_app_get_description()->version);
+    const esp_http_client_config_t config = {
+        .url = url,
+        .crt_bundle_attach = esp_crt_bundle_attach,   // check the site's certificate
+        .timeout_ms = HTTP_TIMEOUT_MS,
+        .user_agent = agent,
+        .event_handler = on_http_event,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
+        .keep_alive_enable = true,
+    };
+    return esp_http_client_init(&config);
+}
+
+/* Set the method, the headers and the body of the request. */
+static void fill_in(esp_http_client_handle_t client, const cloud_request_t *request)
+{
+    esp_http_client_set_method(client, request->post ? HTTP_METHOD_POST : HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "X-Firmware-Version", esp_app_get_description()->version);
+    // The connection is used for both kinds of call: take off the headers of the other kind.
+    if (request->auth == CLOUD_AUTH_DEVICE) {
+        esp_http_client_delete_header(client, "Authorization");
+        esp_http_client_set_header(client, "X-Device-Id", cloud_identity_id());
+        esp_http_client_set_header(client, "X-Device-Secret", cloud_identity_secret());
+    } else {
+        char bearer[160];
+        snprintf(bearer, sizeof(bearer), "Bearer %s", request->token ? request->token : "");
+        esp_http_client_delete_header(client, "X-Device-Id");
+        esp_http_client_delete_header(client, "X-Device-Secret");
+        esp_http_client_set_header(client, "Authorization", bearer);
+    }
+    if (request->json) {
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+        esp_http_client_set_post_field(client, request->json, (int)strlen(request->json));
+    } else {
+        esp_http_client_set_post_field(client, NULL, 0);   // also takes off Content-Type
+    }
+}
+
+/* Send the request on the open connection, or on a new one. ESP_OK = an answer came. */
 static esp_err_t send_once(const cloud_request_t *request, const char *url)
 {
     if (!s_client) {
-        char agent[48];
-        snprintf(agent, sizeof(agent), "TikPrint/%s", esp_app_get_description()->version);
-        const esp_http_client_config_t config = {
-            .url = url,
-            .crt_bundle_attach = esp_crt_bundle_attach,   // check the site's certificate
-            .timeout_ms = HTTP_TIMEOUT_MS,
-            .user_agent = agent,
-            .event_handler = on_http_event,
-            .buffer_size = 4096,
-            .buffer_size_tx = 2048,
-            .keep_alive_enable = true,
-        };
-        s_client = esp_http_client_init(&config);
+        s_client = new_client(url);
         if (!s_client) {
             return ESP_ERR_NO_MEM;
         }
     } else if (esp_http_client_set_url(s_client, url) != ESP_OK) {
         return ESP_FAIL;
     }
-    esp_http_client_set_method(s_client, request->post ? HTTP_METHOD_POST : HTTP_METHOD_GET);
-    esp_http_client_set_header(s_client, "X-Firmware-Version", esp_app_get_description()->version);
-    // The connection is used for both kinds of call: take off the headers of the other kind.
-    if (request->auth == CLOUD_AUTH_DEVICE) {
-        esp_http_client_delete_header(s_client, "Authorization");
-        esp_http_client_set_header(s_client, "X-Device-Id", cloud_identity_id());
-        esp_http_client_set_header(s_client, "X-Device-Secret", cloud_identity_secret());
-    } else {
-        char bearer[160];
-        snprintf(bearer, sizeof(bearer), "Bearer %s", request->token ? request->token : "");
-        esp_http_client_delete_header(s_client, "X-Device-Id");
-        esp_http_client_delete_header(s_client, "X-Device-Secret");
-        esp_http_client_set_header(s_client, "Authorization", bearer);
-    }
-    if (request->json) {
-        esp_http_client_set_header(s_client, "Content-Type", "application/json");
-        esp_http_client_set_post_field(s_client, request->json, (int)strlen(request->json));
-    } else {
-        esp_http_client_set_post_field(s_client, NULL, 0);   // also takes off Content-Type
-    }
+    fill_in(s_client, request);
     return esp_http_client_perform(s_client);
+}
+
+/*
+ * The site answered 401. The HTTP client treats that as a failure and does not hand over the
+ * answer's body, but the body is what says why ("invalid_token": this printer is not linked any
+ * more). So ask once more, step by step on a connection of its own, and read the body ourselves.
+ * This happens once in a printer's life with an account, so the extra call costs nothing.
+ */
+static void ask_again_for_refusal(const cloud_request_t *request, const char *url, cloud_reply_t *reply)
+{
+    s_reply = NULL;   // this answer is read straight into the body below, not through the event handler
+    reply->len = 0;
+    reply->too_big = false;
+    reply->status = -1;
+    esp_http_client_handle_t client = new_client(url);
+    if (!client) {
+        return;
+    }
+    fill_in(client, request);
+    int json_len = request->json ? (int)strlen(request->json) : 0;
+    if (esp_http_client_open(client, json_len) == ESP_OK &&
+        (json_len == 0 || esp_http_client_write(client, request->json, json_len) == json_len) &&
+        esp_http_client_fetch_headers(client) >= 0) {
+        reply->status = esp_http_client_get_status_code(client);
+        while (reply->len < s_reply_max) {
+            int n = esp_http_client_read(client, reply->body + reply->len, (int)(s_reply_max - reply->len));
+            if (n <= 0) {
+                break;
+            }
+            reply->len += (size_t)n;
+        }
+    }
+    esp_http_client_cleanup(client);
 }
 
 void cloud_http(const cloud_request_t *request, cloud_reply_t *reply)
@@ -115,13 +159,22 @@ void cloud_http(const cloud_request_t *request, cloud_reply_t *reply)
     int64_t started_us = esp_timer_get_time();
     bool reused = s_client != NULL;
     esp_err_t err = send_once(request, url);
-    if (err != ESP_OK && reused) {
+    bool refused = err != ESP_OK && s_client && esp_http_client_get_status_code(s_client) == 401;
+    if (err != ESP_OK && reused && !refused) {
         // The site closes a connection that has been quiet for a while: that is not a failure.
         // Start again on a new one.
         cloud_http_close();
         reply->len = 0;
         reply->too_big = false;
         err = send_once(request, url);
+        refused = err != ESP_OK && s_client && esp_http_client_get_status_code(s_client) == 401;
+    }
+    if (refused) {
+        cloud_http_close();
+        ask_again_for_refusal(request, url, reply);
+        err = reply->status > 0 ? ESP_OK : ESP_FAIL;
+    } else if (err == ESP_OK) {
+        reply->status = esp_http_client_get_status_code(s_client);
     }
     s_reply = NULL;
     int took_ms = (int)((esp_timer_get_time() - started_us) / 1000);
@@ -131,11 +184,11 @@ void cloud_http(const cloud_request_t *request, cloud_reply_t *reply)
         free(reply->body);
         reply->body = NULL;
         reply->len = 0;
+        reply->status = -1;
         ESP_LOGW(TAG, "%s %.*s failed after %d ms: %s", request->post ? "POST" : "GET", path_len, request->path,
                  took_ms, esp_err_to_name(err));
         return;
     }
-    reply->status = esp_http_client_get_status_code(s_client);
     reply->body[reply->len] = 0;
     ESP_LOGI(TAG, "%s %.*s -> %d, %u bytes in %d ms", request->post ? "POST" : "GET", path_len, request->path,
              reply->status, (unsigned)reply->len, took_ms);
