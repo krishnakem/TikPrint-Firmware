@@ -28,6 +28,7 @@ typedef struct {
     cloud_auth_t auth;
     const char *token;    // the device token, for CLOUD_AUTH_TOKEN
     const char *json;     // the body of a POST, or NULL for none
+    bool listening;       // send "X-Realtime: 1": the printer is listening on Realtime, and this check-in is only its backup
     size_t max_bytes;     // the biggest answer accepted
 } cloud_request_t;
 

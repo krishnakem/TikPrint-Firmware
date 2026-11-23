@@ -70,6 +70,8 @@ static TaskHandle_t s_task;
 static fw_github_status_t s_status;
 static command_t s_command;
 static char s_tag[40];             // the release's tag exactly as GitHub gave it, e.g. "v0.2.0" or "v0.4.0-beta.7"
+static char s_install_tag[40];     // the release being installed: s_tag, or the version TikPrint Cloud asked for
+static fw_github_listener_t s_listener;   // told how each install goes (set once, before the task starts)
 static int64_t s_checked_at_us;    // when GitHub last answered
 static int64_t s_next_auto_us;     // when to check next without being asked
 
@@ -110,15 +112,20 @@ static void set_error(const char *message)
     }
 }
 
-static esp_err_t ask(command_t command)
+/* Ask the task to do something. install_tag: for CMD_INSTALL, the release to install; NULL = the
+ * latest one the last check found. */
+static esp_err_t ask(command_t command, const char *install_tag)
 {
     esp_err_t err = ESP_OK;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_status.state != FW_GITHUB_IDLE || s_command != CMD_NONE) {
         err = ESP_ERR_INVALID_STATE;
-    } else if (command == CMD_INSTALL && !s_status.available) {
+    } else if (command == CMD_INSTALL && !install_tag && !s_status.available) {
         err = ESP_ERR_NOT_FOUND;
     } else {
+        if (command == CMD_INSTALL) {
+            strlcpy(s_install_tag, install_tag ? install_tag : s_tag, sizeof(s_install_tag));
+        }
         s_command = command;
         s_status.error[0] = 0;
         // Show the new state at once, so the page never sees "idle" between asking and starting.
@@ -134,12 +141,24 @@ static esp_err_t ask(command_t command)
 
 esp_err_t fw_github_check_now(void)
 {
-    return ask(CMD_CHECK);
+    return ask(CMD_CHECK, NULL);
 }
 
 esp_err_t fw_github_install(void)
 {
-    return ask(CMD_INSTALL);
+    return ask(CMD_INSTALL, NULL);
+}
+
+void fw_github_set_listener(fw_github_listener_t listener)
+{
+    s_listener = listener;
+}
+
+static void tell_listener(fw_github_step_t step, const char *error)
+{
+    if (s_listener) {
+        s_listener(step, error ? error : "");
+    }
 }
 
 esp_err_t fw_github_set_beta(bool on)
@@ -147,7 +166,7 @@ esp_err_t fw_github_set_beta(bool on)
     // The setting goes in before the check is asked for, because the check reads it as it starts.
     bool before = settings_get_beta_updates();
     settings_set_beta_updates(on);
-    esp_err_t err = ask(CMD_CHECK);
+    esp_err_t err = ask(CMD_CHECK, NULL);
     if (err != ESP_OK) {
         settings_set_beta_updates(before);   // busy: the switch stays as it was
         return err;
@@ -210,6 +229,56 @@ static bool tag_is_plain(const char *tag)
         }
     }
     return true;
+}
+
+/* Exactly "1.3.0" or "1.3" or "1.3.0-beta.7": digits and dots, and at most that one ending.
+ * Stricter than parse_version, because this text comes from outside and goes into an address. */
+static bool version_is_strict(const char *text)
+{
+    int numbers = 0;
+    const char *p = text;
+    for (;;) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+        while (*p >= '0' && *p <= '9') {
+            p++;
+        }
+        numbers++;
+        if (*p != '.') {
+            break;
+        }
+        p++;
+    }
+    if (numbers < 2 || numbers > 3) {
+        return false;
+    }
+    if (strncmp(p, "-beta.", 6) == 0) {
+        p += 6;
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+        while (*p >= '0' && *p <= '9') {
+            p++;
+        }
+    }
+    return *p == 0 && p - text <= 24;
+}
+
+esp_err_t fw_github_install_version(const char *version)
+{
+    if (!version || !version_is_strict(version)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!is_newer(version, esp_app_get_description()->version)) {
+        return ESP_ERR_INVALID_VERSION;
+    }
+    if (!s_task) {
+        return ESP_ERR_INVALID_STATE;   // the updater has not started yet: ask again in a moment
+    }
+    char tag[sizeof(s_install_tag)];
+    snprintf(tag, sizeof(tag), "v%s", version);   // releases are tagged "v" + version (.github/workflows/release.yml)
+    return ask(CMD_INSTALL, tag);
 }
 
 /* Fetch GitHub's description of the latest release (or, at RECENT_URL, of the newest few) into
@@ -337,10 +406,20 @@ static void do_check(void)
              tag[0] ? tag : "none", available ? " (newer: an update is available)" : "");
 }
 
+/* An install has been given up on: say why, to the page and to whoever asked for it. */
+static void install_failed(const char *problem)
+{
+    set_error(problem);
+    set_state(FW_GITHUB_IDLE);
+    tell_listener(FW_GITHUB_STEP_FAILED, problem);
+}
+
 static void do_install(void)
 {
     char url[160];
-    snprintf(url, sizeof(url), DOWNLOAD_URL_FMT, s_tag);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(url, sizeof(url), DOWNLOAD_URL_FMT, s_install_tag);
+    xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "downloading %s", url);
 
     // GitHub answers with a redirect to a very long address on its file servers,
@@ -362,9 +441,8 @@ static void do_install(void)
     esp_err_t err = esp_https_ota_begin(&config, &ota);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "could not start the download: %s", esp_err_to_name(err));
-        set_error(wifi_up() ? "Could not download the update from GitHub. Nothing was changed"
-                            : "The printer is not on Wi-Fi, so it cannot reach GitHub");
-        set_state(FW_GITHUB_IDLE);
+        install_failed(wifi_up() ? "Could not download the update from GitHub. Nothing was changed"
+                                 : "The printer is not on Wi-Fi, so it cannot reach GitHub");
         return;
     }
 
@@ -396,17 +474,16 @@ static void do_install(void)
     }
     if (problem) {
         esp_https_ota_abort(ota);
-        set_error(problem);
-        set_state(FW_GITHUB_IDLE);
+        install_failed(problem);
         return;
     }
 
     // Checks the whole file and tells the bootloader to start it next time.
+    tell_listener(FW_GITHUB_STEP_INSTALLING, NULL);
     err = esp_https_ota_finish(ota);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "the downloaded firmware did not pass its check: %s", esp_err_to_name(err));
-        set_error("The download arrived damaged. Nothing was changed");
-        set_state(FW_GITHUB_IDLE);
+        install_failed("The download arrived damaged. Nothing was changed");
         return;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -425,6 +502,7 @@ static void do_install(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     ESP_LOGI(TAG, "update installed");
+    tell_listener(FW_GITHUB_STEP_RESTARTING, NULL);
     fw_update_restart_soon();
 }
 
@@ -433,18 +511,25 @@ static void github_task(void *arg)
     s_next_auto_us = (int64_t)FIRST_CHECK_S * 1000000;
     while (true) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000));   // woken when asked; otherwise look every 10 s
+        bool wifi = wifi_up();
         xSemaphoreTake(s_lock, portMAX_DELAY);
         command_t command = s_command;
         s_command = CMD_NONE;
-        fw_github_state_t state = s_status.state;
+        // The quiet daily look is decided in here, with the lock held, so that an install asked for
+        // at the same moment is refused as "busy" and not started halfway through the look.
+        bool daily = command == CMD_NONE && s_status.state == FW_GITHUB_IDLE &&
+                     esp_timer_get_time() >= s_next_auto_us && wifi;
+        if (daily) {
+            s_status.state = FW_GITHUB_CHECKING;
+        }
         xSemaphoreGive(s_lock);
 
         if (command == CMD_CHECK) {
             do_check();
         } else if (command == CMD_INSTALL) {
             do_install();
-        } else if (state == FW_GITHUB_IDLE && esp_timer_get_time() >= s_next_auto_us && wifi_up()) {
-            do_check();   // the quiet daily look. A failure here is not shown as an error
+        } else if (daily) {
+            do_check();   // a failure here is not shown as an error
             set_error("");
         }
     }

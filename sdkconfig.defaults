@@ -33,3 +33,12 @@ CONFIG_MDNS_PREDEF_NETIF_AP=n
 # default of 10 that left none for the board's own calls out (weather, firmware updates) while a
 # page was open in a busy browser.
 CONFIG_LWIP_MAX_SOCKETS=16
+
+# --- Memory for secure connections (TLS) ---
+# A linked printer keeps up to three secure connections open at once (the Realtime socket, the
+# printer's row, TikPrint Cloud), next to the ones that come and go (weather, firmware updates).
+# Each needs a 16 KB receive buffer. "Default" lets the usual rule decide where memory comes from:
+# anything of 16 KB or more goes to the big external RAM (PSRAM), small pieces stay in the fast
+# internal RAM, and when internal RAM runs short the external RAM is used instead of failing.
+# (The setting before, "internal", took all of it from the small internal RAM.)
+CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y

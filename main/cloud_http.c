@@ -133,6 +133,11 @@ static void fill_in(esp_http_client_handle_t client, const cloud_request_t *requ
         esp_http_client_delete_header(client, "X-Device-Secret");
         esp_http_client_set_header(client, "Authorization", bearer);
     }
+    if (request->listening) {
+        esp_http_client_set_header(client, "X-Realtime", "1");
+    } else {
+        esp_http_client_delete_header(client, "X-Realtime");
+    }
     if (request->json) {
         esp_http_client_set_header(client, "Content-Type", "application/json");
         esp_http_client_set_post_field(client, request->json, (int)strlen(request->json));

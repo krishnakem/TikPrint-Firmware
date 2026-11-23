@@ -4,8 +4,8 @@
 #include "esp_err.h"
 
 /*
- * The board's side of TikPrint Cloud: pairing with an account, then checking in every few
- * seconds for tickets to print (docs/device-api.md in the TikPrint Cloud repo is the contract).
+ * The board's side of TikPrint Cloud: pairing with an account, then listening and checking in
+ * for tickets to print (docs/device-api.md in the TikPrint Cloud repo is the contract).
  *
  * The rule above all others: A PRINTER THAT IS NOT LINKED NEVER CALLS THE CLOUD.
  * The first call ever made is "pair/start", and only because someone pressed the TikPrint Cloud button on the
@@ -88,3 +88,17 @@ esp_err_t cloud_unlink_request(int *expires_in_s, int *wait_s);
  *   ESP_ERR_NOT_FOUND      there is no code to check against: none was printed, or it ran out
  */
 esp_err_t cloud_unlink_confirm(const char *code, int *tries_left);
+
+/* ---------- For the Realtime task (cloud_realtime.c). Any task may call these. ---------- */
+
+/** Have the cloud task look again now (the Realtime task needs a session fetched). */
+void cloud_wake(void);
+
+/** Check in for jobs now, not when the wait is over: the socket was lost, or has just come up, or
+ *  the printer may have been unlinked. */
+void cloud_poll_now(void);
+
+/** A print was heard on the socket: the job with this id (and this many bytes; 0 = not said).
+ *  The cloud task downloads, prints and reports it, exactly as it does a job found at a check-in.
+ *  A job is printed once however often it is heard or listed. */
+void cloud_print_command(const char *id, int size);
