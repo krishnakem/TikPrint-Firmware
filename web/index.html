@@ -31,7 +31,12 @@ button{cursor:pointer;background:none;border:0;padding:0}
 
 /* ---------- Transparent menu bar ---------- */
 .menubar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:6px;padding:14px 20px;transition:background .2s,right .28s cubic-bezier(.2,.8,.2,1)}
-.logo{display:flex;align-items:center;gap:8px;font:600 15px var(--sans);letter-spacing:-.01em;margin-right:auto}
+/* The logo is also the status light: one dot after the name for Wi-Fi and the printer together,
+   and a few quiet words only while something is wrong. Pressing it opens the Status popover. */
+.logo{display:flex;align-items:center;gap:8px;font:600 15px var(--sans);letter-spacing:-.01em;margin-right:auto;min-width:0;white-space:nowrap}
+.logo svg,.logo .name{flex:none}
+.logo .stat{min-width:0;overflow:hidden;text-overflow:ellipsis;font:400 13px var(--sans);letter-spacing:0;color:var(--muted)}   /* long words are cut short with "…", never wrapped */
+.logo .stat:empty{display:none}
 .mitem{background:transparent;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 11px;border-radius:8px;font-size:14px;color:var(--muted)}
 .mitem:hover,.mitem.on{color:var(--ink);background:transparent}
 .led{width:7px;height:7px;border-radius:50%;background:var(--ok)}
@@ -195,11 +200,21 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .pw button{height:34px;padding:0 12px;border-radius:8px;background:var(--btn);color:var(--btn-ink);font-weight:600;font-size:13px}
 .spin{width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
 @keyframes sp{to{transform:rotate(360deg)}}
-.ok-state{display:none;padding:14px 10px 10px;text-align:center}
-.ok-state .c{width:36px;height:36px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;margin:0 auto 10px}
-.ok-state b{display:block;font-size:15px}
-.ok-state code{display:inline-block;margin-top:8px;font:13px var(--mono);padding:6px 10px;border:1px dashed var(--line);border-radius:8px}
+/* Status popover: it hangs under the logo, so it sits on the left (the other popovers sit on the right) */
+#statPop{left:20px;right:auto;max-width:calc(100vw - 40px)}
+#netList h3{margin-top:14px}
+#statPop .kv>span:first-child{flex:none}   /* a long Wi-Fi name is cut short; the row's label never wraps */
+/* the right-hand side of its Wi-Fi and Printer rows: a dot and a few words, with a hint underneath while there is a problem */
+.kv .stv{display:flex;flex-direction:column;align-items:flex-end;gap:2px;min-width:0;margin-left:14px;font:13px var(--sans);text-align:right}
+.kv .stv div{display:flex;align-items:center;gap:7px;max-width:100%}
+.kv .stv .led{flex:none}
+.kv .stv b{font-weight:400;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv .stv small{font-size:12px;line-height:1.3;color:var(--muted)}
+.kv .stv small:empty{display:none}
+/* the two links under the rows while the printer is on Wi-Fi */
+.ok-state{display:none;padding:0 10px 8px;text-align:center}
 .ok-state .link{display:block;margin:12px auto 0;color:var(--muted);font-size:13px}
+.ok-state .link:hover{color:var(--ink)}
 .kv{display:flex;justify-content:space-between;padding:9px 10px;font-size:14px}
 .kv span:last-child{color:var(--muted);font:13px var(--mono)}
 .kv{align-items:center}
@@ -304,11 +319,14 @@ body.paneopen .pop{right:calc(var(--pane) + 20px)}
 #offline span{color:var(--muted);font-size:14px;max-width:260px}
 body.offline #offline{display:flex}
 body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .pane,body.offline .toast{display:none!important}
+/* ... and the logo is only a name again: what its dot said is out of date, and there is nothing to open */
+body.offline .logo .led,body.offline .logo .stat{display:none}
+body.offline .logo{pointer-events:none}
 
 @media (max-width:500px){ .paper,.drop,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
 /* The TikPrint Cloud button is words only, so it never loses its label: when the bar gets tight (smaller screens, and medium ones while the Connectors pane takes its share) it is the first to shrink, to its short label ("Cloud") */
-/* ... and after that a long Wi-Fi name is cut short with "…" rather than wrapping onto a second line */
-.menubar .mitem{white-space:nowrap;flex-shrink:0} .menubar #wifiBtn{flex-shrink:1;min-width:0} #linkLabel{overflow:hidden;text-overflow:ellipsis} .menubar .led{flex-shrink:0}
+/* ... and after that the words next to the logo's dot are cut short with "…" rather than wrapping onto a second line */
+.menubar .mitem{white-space:nowrap;flex-shrink:0} .menubar .led{flex-shrink:0}
 #cloudBtn .s{display:none}
 @media (max-width:760px){ #cloudBtn .t{display:none} #cloudBtn .s{display:inline} }
 @media (min-width:861px) and (max-width:1100px){ body.paneopen #cloudBtn .t{display:none} body.paneopen #cloudBtn .s{display:inline} }
@@ -319,30 +337,33 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
 
 <!-- Transparent menu bar -->
 <header class="menubar" id="bar">
-  <div class="logo">
+  <button class="logo" id="logoBtn" aria-label="Status" aria-haspopup="true" aria-expanded="false" title="Connecting…">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="8" width="18" height="9" rx="2.5"/><path d="M7 8V4h10v4"/><path d="M7 14h10v7l-2.5-1.3L12 21l-2.5-1.3L7 21z"/></svg>
-    TikPrint
-  </div>
-  <button class="mitem" id="wifiBtn"><span class="led off" id="linkLed"></span><span class="t" id="linkLabel">Connecting…</span></button>
-  <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
+    <span class="name">TikPrint</span>
+    <span class="led off" id="statLed"></span><span class="stat" id="statText"></span>
+  </button>
   <button class="mitem" id="cloudBtn" title="TikPrint Cloud" style="visibility:hidden"><span class="t">TikPrint Cloud</span><span class="s">Cloud</span></button>
   <button class="mitem" id="connBtn" title="Connectors" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
 
-<!-- Wi-Fi popover -->
-<div class="pop" id="wifiPop">
-  <div id="netList">
-    <h3>Wi-Fi</h3>
-    <div id="nets"></div>
+<!-- Status popover (opens from the logo): how Wi-Fi and the printer are, and where to find this page.
+     Under the rows: two links while the printer is on Wi-Fi, otherwise the list of networks to join. -->
+<div class="pop" id="statPop">
+  <h3>Status</h3>
+  <div class="grp">
+    <div class="kv"><span>Wi-Fi</span><div class="stv"><div><i class="led off" id="stWifiLed"></i><b id="okName">…</b></div></div></div>
+    <div class="kv"><span>Printer</span><div class="stv"><div><i class="led off" id="stPrnLed"></i><b id="stPrnText">…</b></div><small id="stPrnHint"></small></div></div>
+    <div class="kv"><span>Address</span><span id="okHost">tikprint.local</span></div>
+    <div class="kv"><span>IP</span><span id="okIp">—</span></div>
   </div>
   <div class="ok-state" id="wifiOk">
-    <div class="c"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
-    <b id="okName"></b>
-    <code id="okHost">tikprint.local</code><br>
-    <code id="okIp"></code>
     <button class="link" id="changeNet">Change network</button>
     <button class="link" id="forgetNet">Forget this network</button>
+  </div>
+  <div id="netList">
+    <h3>Choose a network</h3>
+    <div id="nets"></div>
   </div>
 </div>
 
@@ -867,8 +888,9 @@ $('setLoc').onblur=e=>{if(zipBad){zipBad='';e.target.value=locBoxText()} showLoc
 
 /* ---------- Printer status ---------- */
 /* The board asks the printer how it is every few seconds (this needs the status wire).
-   - Menu bar: the "Printer" dot is green when all is well, hollow when the printer doesn't
-     answer (no status wire, or it is off), amber or red while there is a problem.
+   - Menu bar: the printer has a say in the dot next to the logo (see renderStatus below): green when
+     all is well, hollow when the printer doesn't answer (no status wire, or it is off), amber or red
+     while there is a problem, with the problem in words next to it.
    - Under the Print button: a quiet note, only while there is a problem, saying what it is,
      what to do, and how many tickets are waiting for it.
    "holds" problems keep tickets in the queue until they are fixed; Print still works and adds to the line. */
@@ -879,10 +901,12 @@ const PRINTER_PROBLEMS={
   offline:{text:'Printer offline',hint:'Check the printer',led:'warn'},
   paper_low:{text:'Paper running low',hint:'Have a new roll ready',led:'warn'},
 };
-const PRINTER_QUIET={ok:{led:'',title:'Printer ready'}, unknown:{led:'off',title:'Printer status unknown: it doesn’t answer'}};
+const PRINTER_QUIET={ok:{led:'',say:'Ready',title:'Printer ready'}, unknown:{led:'off',say:'No answer',title:'Printer status unknown: it doesn’t answer'}};
+/* What the logo's dot and the Status popover say about the printer. text is empty while there is nothing wrong. */
+let prn={led:'off',text:'',say:'…',hint:'',title:'Printer status unknown'};
 function showPrinter(p,q){
   const x=PRINTER_PROBLEMS[p.status], quiet=PRINTER_QUIET[p.status]||PRINTER_QUIET.unknown, led=x?(x.led||'bad'):quiet.led;
-  $('prnLed').className='led '+led; $('prnItem').title=x?x.text:quiet.title;
+  prn={led, text:x?x.text:'', say:x?x.text:quiet.say, hint:x?x.hint:'', title:x?x.text:quiet.title}; renderStatus();
   $('prnNote').hidden=!x; if(!x)return;
   const n=q?q.waiting:0, held=x.holds&&n;
   $('prnNoteLed').className='led '+led;
@@ -893,14 +917,23 @@ function showPrinter(p,q){
 
 /* ---------- Status (menu bar, ticket number, settings) ---------- */
 let viaUsb=false, scanning=false, printing=false, updating=false;   // updating: a firmware update is under way
-/* One light in the top bar for how the printer is connected: the cable this page may be using (USB-C)
-   and the board's own Wi-Fi. Green = on Wi-Fi, so the weather and updates work. Yellow = something
-   to do: it is reached over USB-C only and Wi-Fi is not set up yet. Clicking it opens the Wi-Fi list. */
+/* How the printer is connected: the cable this page may be using (USB-C) and the board's own Wi-Fi.
+   Green = on Wi-Fi, so the weather and updates work. Yellow = something to do: Wi-Fi is not set up yet
+   (the page is then usually reached over USB-C). */
 let wifiIp='', wifiJoining=false;
-function showLink(){
-  $('linkLed').className='led'+(wifi?'':' warn');
-  $('linkLabel').textContent=!viaUsb?'Wi-Fi':wifi?'USB-C + Wi-Fi':wifiJoining?'USB-C · joining Wi-Fi…':'USB-C · set up Wi-Fi';
-  $('wifiBtn').title=(viaUsb?'This page is using the USB-C cable. ':'This page is using Wi-Fi. ')+(wifi?`Wi-Fi: ${wifi} · ${wifiIp}`:'Wi-Fi is not set up');
+function showLink(){renderStatus()}
+/* ONE dot next to the logo for Wi-Fi and the printer together. The worse of the two wins
+   (red > yellow > hollow > green; the printer if they are level), and only a problem gets words:
+   while all is well the dot is alone. The logo's tooltip and the Status popover always tell both. */
+const WORSE={bad:3,warn:2,off:1,'':0};
+function renderStatus(){
+  const wLed=wifi?'':'warn', wText=wifi?'':!viaUsb?'No Wi-Fi':wifiJoining?'USB-C · joining Wi-Fi…':'USB-C · set up Wi-Fi';
+  const top=WORSE[prn.led]>=WORSE[wLed]?prn:{led:wLed,text:wText};
+  $('statLed').className='led '+top.led; $('statText').textContent=top.text;
+  $('logoBtn').title=(viaUsb?'USB-C · ':'')+(wifi?`Wi-Fi: ${wifi} · ${wifiIp}`:wifiJoining?'Joining Wi-Fi…':'Wi-Fi is not set up')+' · '+prn.title;
+  // the same again, row by row, in the Status popover
+  $('stWifiLed').className='led '+wLed; $('okName').textContent=wifi||(wifiJoining?'Joining…':'Not set up'); $('okIp').textContent=wifiIp||'—';
+  $('stPrnLed').className='led '+prn.led; $('stPrnText').textContent=prn.say; $('stPrnHint').textContent=prn.hint;
 }
 function applyStatus(s){
   viaUsb=s.via==='usb';
@@ -915,7 +948,6 @@ function applyStatus(s){
   showZipPlace(s.automations);
   if(s.printer)showPrinter(s.printer,s.print_queue);
   if(s.time){showClock(s.time); if(!s.time.set&&Date.now()-timeSentAt>TIME_RETRY_MS)sendTime()}
-  if(s.wifi&&!joining){$('okName').textContent=s.wifi.ssid;$('okIp').textContent=s.wifi.ip}
   return s;
 }
 let joining=false, misses=0, offline=false;
@@ -960,11 +992,12 @@ addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{p
 function closeAll(except){
   if(updating)except='gearPop';     // a firmware update is running: its progress stays on screen
   if(except!=='gearPop')closeSheet();
-  ['wifiPop','gearPop','cloudPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
+  ['statPop','gearPop','cloudPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
   if(except!=='cloudPop')delete $('cloudPop').dataset.shown;   // drawn afresh the next time it opens
-  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('cloudBtn').classList.toggle('on',except==='cloudPop');
+  $('logoBtn').setAttribute('aria-expanded',except==='statPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('cloudBtn').classList.toggle('on',except==='cloudPop');
 }
-$('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
+/* The logo opens the Status popover. It shows what is known at once (links or the network list), then asks the board afresh. */
+$('logoBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('statPop').classList.contains('open');closeAll(o?'statPop':null);$('statPop').classList.toggle('open',o);if(o){showList(!wifi);openWifi()}};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
 /* The Connectors pane is not a popover: it stays open until its button or its ✕ is pressed. */
 /* which: false = the grid of apps, 'weather' = Weather's settings */
@@ -1197,8 +1230,7 @@ async function join(net){
   joining=false;btn.textContent='Join';
   if(r.ok){
     if(inp)inp.value='';
-    wifi=r.ssid;$('okName').textContent=r.ssid;$('okIp').textContent=r.ip;showList(false);
-    wifiIp=r.ip; showLink();
+    wifi=r.ssid; wifiIp=r.ip; showLink(); showList(false);
   }else if(r.error==='wrong_password'&&inp){inp.classList.add('bad');inp.focus();inp.select()}
   else toast(r.error==='not_found'?'Network not found':r.error==='lost'?'Lost contact with the printer':'Couldn’t join. Try again.');
   refreshStatus();
