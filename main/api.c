@@ -22,6 +22,7 @@
  *   POST /api/connectors/print-now  fetch the active connector's list and print it now
  *   GET  /api/cloud/status   whether this printer is linked to TikPrint Cloud, and where the cloud is
  *   POST /api/cloud/pair     "Upgrade" was pressed: get a pairing code from the cloud and print the ticket to scan
+ *   POST /api/cloud/unlink   "Reset / Unlink" was pressed: delete the device token and tell the cloud
  */
 #include <string.h>
 #include <stdlib.h>
@@ -1658,6 +1659,22 @@ static esp_err_t cloud_pair_post(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/* ---------- POST /api/cloud/unlink ----------
+ * "Reset / Unlink" was pressed in Settings. The device token is deleted before this replies, so the
+ * printer is local only from now on, whether or not the cloud can be reached to be told.
+ * Replies {"ok":true,"linked":false}. */
+static esp_err_t cloud_unlink_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    cloud_unlink();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "linked", cloud_state_is_linked());
+    return send_json(req, root);
+}
+
 #if CLOUD_DEBUG_FAKE_LINK
 /* ---------- POST /api/cloud/debug-link ---------- (testing only, see CLOUD_DEBUG_FAKE_LINK in config.h)
  *   {"token":"anything","printer_id":"abc123"}   save a made-up link
@@ -1715,6 +1732,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/connectors/print-now", .method = HTTP_POST, .handler = connectors_print_now_post },
         { .uri = "/api/cloud/status", .method = HTTP_GET, .handler = cloud_status_get },
         { .uri = "/api/cloud/pair", .method = HTTP_POST, .handler = cloud_pair_post },
+        { .uri = "/api/cloud/unlink", .method = HTTP_POST, .handler = cloud_unlink_post },
 #if CLOUD_DEBUG_FAKE_LINK
         { .uri = "/api/cloud/debug-link", .method = HTTP_POST, .handler = cloud_debug_link_post },
 #endif

@@ -49,3 +49,11 @@ const char *cloud_phase_name(cloud_phase_t phase);
  *   ESP_ERR_NO_MEM         out of memory
  */
 esp_err_t cloud_pair(void);
+
+/**
+ * "Reset / Unlink" was pressed on the printer's own page. The token is deleted here and now,
+ * whatever happens next: from this moment the printer is local only. The cloud is then told in
+ * the background, if it can be reached (if not, the website lists the printer until the owner
+ * removes it there). Also stops a pairing that is under way.
+ */
+void cloud_unlink(void);
