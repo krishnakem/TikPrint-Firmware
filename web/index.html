@@ -339,7 +339,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
   <button class="mitem" id="wifiBtn"><span class="led off" id="linkLed"></span><span class="t" id="linkLabel">Connecting…</span></button>
   <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
-  <button class="mitem" id="proBtn" title="Upgrade to Pro"><span class="t">Upgrade to Pro</span><span class="s">Pro</span></button>
+  <button class="mitem" id="proBtn" title="Upgrade to Pro" style="visibility:hidden"><span class="t">Upgrade to Pro</span><span class="s">Pro</span></button>
   <button class="mitem" id="connBtn" title="Connectors" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
@@ -665,6 +665,7 @@ async function refreshCloud(){
   cloud={linked:!!(ok&&c.linked), state:ok&&c.state?String(c.state):'local', code:ok&&c.code?String(c.code):'', message:ok&&c.message?String(c.message):'',
          printer_id:ok&&c.linked&&c.printer_id?String(c.printer_id):'', cloud_url:ok?c.cloud_url:cloud.cloud_url};
   showCloud();
+  $('proBtn').style.visibility='';   // hidden until the board has been asked once, so a linked printer never flashes "Upgrade to Pro"
 }
 let ticket=1, wifi=null;
 const pad=n=>'#'+String(n).padStart(4,'0');
