@@ -20,6 +20,7 @@
  *   POST /api/automations/weather/print-now  fetch the weather and print it now ({"kind": "today"|"rest"|"tomorrow"}, optional)
  *   POST /api/connectors            set up, switch or disconnect the connector; its schedule and look (see connectors_post)
  *   POST /api/connectors/print-now  fetch the active connector's list and print it now
+ *   GET  /api/cloud/status   whether this printer is linked to TikPrint Cloud, and where the cloud is
  */
 #include <string.h>
 #include <stdlib.h>
@@ -46,6 +47,8 @@
 #include "fw_update.h"
 #include "automations.h"
 #include "connectors.h"
+#include "cloud_state.h"
+#include "config.h"
 #include "zip_table.h"
 #include "city_table.h"
 #include "ticket_draw.h"
@@ -1581,6 +1584,54 @@ static esp_err_t connectors_print_now_post(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/* ---------- GET /api/cloud/status ----------
+ * Whether this printer is linked to TikPrint Cloud ("Pro"), for the page's Pro buttons:
+ *   {"linked":false,"cloud_url":"https://..."}
+ *   {"linked":true,"printer_id":"...","cloud_url":"https://..."}
+ * It only reads what the board has saved: nothing is asked of the cloud.
+ * The device token is never sent back. */
+static esp_err_t cloud_status_get(httpd_req_t *req)
+{
+    char printer_id[CLOUD_PRINTER_ID_MAX];
+    bool linked = cloud_state_get_printer_id(printer_id, sizeof(printer_id));
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "linked", linked);
+    if (linked && printer_id[0]) {
+        cJSON_AddStringToObject(root, "printer_id", printer_id);
+    }
+    cJSON_AddStringToObject(root, "cloud_url", cloud_state_get_cloud_url());
+    return send_json(req, root);
+}
+
+#if CLOUD_DEBUG_FAKE_LINK
+/* ---------- POST /api/cloud/debug-link ---------- (testing only, see CLOUD_DEBUG_FAKE_LINK in config.h)
+ *   {"token":"anything","printer_id":"abc123"}   save a made-up link
+ *   {}                                             erase the link
+ * Replies {"ok":true,"linked":...}. */
+static esp_err_t cloud_debug_link_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *token = cJSON_GetObjectItem(body, "token"), *printer_id = cJSON_GetObjectItem(body, "printer_id");
+    esp_err_t err = cJSON_IsString(token)
+        ? cloud_state_save_link(token->valuestring, cJSON_IsString(printer_id) ? printer_id->valuestring : "")
+        : cloud_state_clear();
+    cJSON_Delete(body);
+    if (err != ESP_OK) {
+        return refuse(req, "400 Bad Request", "bad_link", "Could not save that link");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "linked", cloud_state_is_linked());
+    return send_json(req, root);
+}
+#endif
+
 void api_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -1607,6 +1658,10 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/automations/weather/run-slot", .method = HTTP_POST, .handler = weather_run_slot_post },
         { .uri = "/api/connectors", .method = HTTP_POST, .handler = connectors_post },
         { .uri = "/api/connectors/print-now", .method = HTTP_POST, .handler = connectors_print_now_post },
+        { .uri = "/api/cloud/status", .method = HTTP_GET, .handler = cloud_status_get },
+#if CLOUD_DEBUG_FAKE_LINK
+        { .uri = "/api/cloud/debug-link", .method = HTTP_POST, .handler = cloud_debug_link_post },
+#endif
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(server, &routes[i]);

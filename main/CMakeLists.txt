@@ -6,6 +6,7 @@ idf_component_register(
          "zip_table.c" "city_table.c" "weather.c" "weather_ticket.c" "weather_icons.c" "automations.c"
          "ticket_draw.c" "ticket_header.c" "weather_render.c"
          "connectors.c" "conn_http.c" "conn_ticket.c" "conn_todoist.c"
+         "cloud_state.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_netif esp_event nvs_flash esp_http_server lwip esp_psram
                   esp_wifi esp_timer esp_app_format esp_driver_uart esp_driver_gpio
