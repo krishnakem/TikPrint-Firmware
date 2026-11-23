@@ -39,6 +39,13 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.15.1
+  espressif/qrcode:
+    component_hash: 31e70991ce22f28d73a4386417fc9c0993f61e1aab1832474fd9e3db8da9dcbd
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.0
   espressif/tinyusb:
     component_hash: 95e10bf67a64897daadb95681c032cfbbdc77240931fc23f47709a254a3db290
     dependencies:
@@ -63,6 +70,7 @@ direct_dependencies:
 - espressif/cjson
 - espressif/esp_tinyusb
 - espressif/mdns
-manifest_hash: 7b99396147791eb4713d85ac9d6b8a2ee65751deb61b104ed9eb9c6936330ca7
+- espressif/qrcode
+manifest_hash: 69ecfa50c87b33e55fdaed05a8c8d8ff8ed1297fc71c4e9d4dbd81376543c763
 target: esp32s3
 version: 3.0.0
