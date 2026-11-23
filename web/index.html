@@ -241,6 +241,7 @@ button.kv:hover{background:var(--hover)}
 #cloudPop .sheet{display:block}
 .sheet code{display:inline-block;margin:10px 0 4px;font:600 19px var(--mono);letter-spacing:.06em;padding:7px 12px;border:1px dashed var(--line);border-radius:8px}
 .sheet code:empty,.sheet .btn[hidden]{display:none}
+#clText{white-space:pre-line}   /* the site's address gets a line of its own, so it is not broken in two */
 /* Upload progress */
 .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px 10px 8px}
 .bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
@@ -474,6 +475,11 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
       <label class="kv" title="Also offer builds that are still being worked on"><span>Beta updates</span><input type="checkbox" class="sw" id="swBeta"></label>
       <button class="kv" id="fwBtn" hidden><span>Install from file</span><span class="go">›</span></button>
     </div>
+    <!-- only shown while this printer is linked to TikPrint Cloud -->
+    <h3 id="cloudSetH" hidden>TikPrint Cloud</h3>
+    <div class="grp" id="cloudSet" hidden>
+      <button class="kv" id="cloudUnlink"><span>Reset / Unlink</span><span class="go">›</span></button>
+    </div>
     <input type="file" id="fwFile" accept=".bin,application/octet-stream" hidden>
   </div>
   <!-- An update's question and progress are shown here, in place of the list above -->
@@ -597,6 +603,7 @@ let cloud={linked:false,state:'local',code:'',message:'',printer_id:'',cloud_url
 const cloudLabel=()=>cloud.linked?'Open TikPrint Cloud':'Upgrade to Pro';
 function showCloud(){
   showCloudPop();
+  $('cloudSetH').hidden=$('cloudSet').hidden=!cloud.linked;   // Settings > TikPrint Cloud > Reset / Unlink
   const label=cloudLabel(), pro=$('proBtn');
   if(pro.title===label)return;   // nothing changed since the last look
   pro.title=label; pro.querySelector('.t').textContent=label; pro.querySelector('.s').textContent=cloud.linked?'Cloud':'Pro';
@@ -630,7 +637,7 @@ function showCloudPop(){
   if(!$('cloudPop').classList.contains('open'))return;
   const site=cloud.cloud_url.replace(/^https?:\/\//,'').replace(/\/+$/,'');
   const o=cloud.linked?{icon:'ok',tone:'ok',title:'Linked',go:'Open TikPrint Cloud',act:openCloudSite}:
-    cloud.state==='pairing'?{icon:'wait',title:'Scan the ticket to link',code:cloud.code,text:site?`or type the code at ${site}/link`:''}:
+    cloud.state==='pairing'?{icon:'wait',title:'Scan the ticket to link',code:cloud.code,text:site?`or type the code at\n${site}/link`:''}:
     cloud.state==='expired'?{icon:'bad',title:'Code expired',go:'Try again',act:startLinking}:
     cloud.state==='failed'?{icon:'bad',tone:'bad',title:'Couldn’t link',text:cloud.message,go:'Try again',act:startLinking}:
     cloud.state==='starting'||Date.now()-linkAskedAt<4000?{icon:'wait',title:'Getting a code'}:   // the board may not have heard yet
@@ -640,6 +647,16 @@ function showCloudPop(){
   $('clIco').className='c'+(o.tone?' '+o.tone:''); $('clIco').innerHTML=SHEET_ICONS[o.icon];
   $('clTitle').textContent=o.title; $('clCode').textContent=o.code||''; $('clText').textContent=o.text||'';
   $('clGo').hidden=!o.go; $('clGo').textContent=o.go||''; $('clGo').onclick=o.act||null;
+}
+/* Settings > Reset / Unlink: the board deletes its token at once and is local only again. It tells the
+   cloud if it can; if it can't, the website lists the printer until it is removed there. */
+function askUnlink(){
+  showSheet({icon:'bad',title:'Unlink this printer?',text:'It goes back to printing from this page only.',go:'Unlink',cancel:'Cancel'});
+  $('shGo').onclick=async()=>{
+    let r=null; try{r=await api('/api/cloud/unlink',{},5000)}catch(e){}
+    closeSheet(); await refreshCloud();
+    toast(r&&r.ok?'Printer unlinked':'Can’t reach the printer');
+  };
 }
 async function refreshCloud(){
   let c=null; try{c=await api('/api/cloud/status',undefined,2500)}catch(e){}
@@ -992,6 +1009,7 @@ function showPane(on){
   $('connBtn').classList.toggle('on',on); $('connBtn').setAttribute('aria-expanded',on);
 }
 $('proBtn').onclick=openCloud;
+$('cloudUnlink').onclick=askUnlink;
 $('connBtn').onclick=()=>showPane(!$('connPop').classList.contains('open'));
 $('connClose').onclick=()=>showPane(false);
 $('connBack').onclick=()=>showConn(false);
