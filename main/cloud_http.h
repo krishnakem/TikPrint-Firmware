@@ -22,6 +22,7 @@ typedef enum {
 } cloud_auth_t;
 
 typedef struct {
+    const char *name;     // what the call is, for /api/cloud/status ("last_call"): "pair/start", "jobs", ...
     bool post;            // false = GET
     const char *path;     // what comes after CLOUD_URL, e.g. "/api/device/jobs"
     cloud_auth_t auth;
@@ -41,6 +42,22 @@ typedef struct {
 void cloud_http(const cloud_request_t *request, cloud_reply_t *reply);
 
 void cloud_reply_free(cloud_reply_t *reply);
+
+/*
+ * What has gone out to TikPrint Cloud since the board started, for GET /api/cloud/status. With no
+ * serial cable attached, this is how to see that a printer that is not linked calls nobody (calls
+ * stays 0), and what a linked one last did. No secret is kept here.
+ */
+typedef struct {
+    unsigned calls;        // calls sent to the cloud since the board started
+    char last_call[16];    // the name of the newest one, "" if there has been none
+    char last_error[32];   // how the newest one failed: "timeout", "no_connection", "http_503", or the cloud's
+                           // own word such as "invalid_token". "no_wifi" if it could not even be sent.
+                           // "" if it went well, or there has been none
+} cloud_http_seen_t;
+
+/** This one may be called from any task. */
+void cloud_http_get_seen(cloud_http_seen_t *out);
 
 /** Close the connection (the board is going back to local only, or has nothing to say for a while). */
 void cloud_http_close(void);

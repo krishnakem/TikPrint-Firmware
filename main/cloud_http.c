@@ -10,6 +10,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 
 #include "cloud_http.h"
 #include "cloud_identity.h"
@@ -24,6 +25,56 @@ static const char *TAG = "cloud_http";
 static esp_http_client_handle_t s_client;   // the open connection, or NULL
 static cloud_reply_t *s_reply;              // where the answer being received goes
 static size_t s_reply_max;
+
+/* What has gone out so far (see cloud_http_seen_t). Written by the cloud task and read by the web
+ * server, so every touch is inside a short "nobody interrupt me" section. */
+static portMUX_TYPE s_seen_mux = portMUX_INITIALIZER_UNLOCKED;
+static cloud_http_seen_t s_seen;
+
+void cloud_http_get_seen(cloud_http_seen_t *out)
+{
+    taskENTER_CRITICAL(&s_seen_mux);
+    *out = s_seen;
+    taskEXIT_CRITICAL(&s_seen_mux);
+}
+
+/* A call is about to go out. */
+static void seen_call(const char *name)
+{
+    taskENTER_CRITICAL(&s_seen_mux);
+    s_seen.calls++;
+    strlcpy(s_seen.last_call, name ? name : "?", sizeof(s_seen.last_call));
+    taskEXIT_CRITICAL(&s_seen_mux);
+}
+
+/* How the newest call ended: "" = well. */
+static void seen_error(const char *error)
+{
+    taskENTER_CRITICAL(&s_seen_mux);
+    strlcpy(s_seen.last_error, error, sizeof(s_seen.last_error));
+    taskEXIT_CRITICAL(&s_seen_mux);
+}
+
+/* Why the cloud said no: its own word for it if the answer has one ({"error":"invalid_token",...}),
+ * otherwise the status, as "http_503". Only small letters, digits and "_" are taken over. */
+static void refusal_word(const cloud_reply_t *reply, char *out, size_t size)
+{
+    static const char key[] = "\"error\":\"";
+    const char *word = strstr(reply->body, key);
+    size_t n = 0;
+    if (word) {
+        word += strlen(key);
+        while (n + 1 < size && ((word[n] >= 'a' && word[n] <= 'z') || (word[n] >= '0' && word[n] <= '9') || word[n] == '_')) {
+            n++;
+        }
+    }
+    if (n > 0 && word[n] == '"') {
+        memcpy(out, word, n);
+        out[n] = 0;
+    } else {
+        snprintf(out, size, "http_%d", reply->status);
+    }
+}
 
 /* Called by the HTTP client as pieces of the answer arrive. */
 static esp_err_t on_http_event(esp_http_client_event_t *evt)
@@ -147,12 +198,15 @@ void cloud_http(const cloud_request_t *request, cloud_reply_t *reply)
     int url_len = snprintf(url, sizeof(url), "%s%s", CLOUD_URL, request->path);
     if (!wifi.connected || url_len >= (int)sizeof(url)) {
         cloud_http_close();   // the connection, if any, went with the Wi-Fi
+        seen_error(wifi.connected ? "bad_address" : "no_wifi");
         return;
     }
     reply->body = heap_caps_malloc(request->max_bytes + 1, MALLOC_CAP_SPIRAM);
     if (!reply->body) {
+        seen_error("no_memory");
         return;
     }
+    seen_call(request->name);   // from here on something goes out to the cloud
     s_reply = reply;
     s_reply_max = request->max_bytes;
 
@@ -185,11 +239,17 @@ void cloud_http(const cloud_request_t *request, cloud_reply_t *reply)
         reply->body = NULL;
         reply->len = 0;
         reply->status = -1;
+        seen_error(took_ms >= HTTP_TIMEOUT_MS ? "timeout" : "no_connection");
         ESP_LOGW(TAG, "%s %.*s failed after %d ms: %s", request->post ? "POST" : "GET", path_len, request->path,
                  took_ms, esp_err_to_name(err));
         return;
     }
     reply->body[reply->len] = 0;
+    char refusal[sizeof(s_seen.last_error)] = "";
+    if (reply->status < 200 || reply->status > 299) {
+        refusal_word(reply, refusal, sizeof(refusal));
+    }
+    seen_error(refusal);
     ESP_LOGI(TAG, "%s %.*s -> %d, %u bytes in %d ms", request->post ? "POST" : "GET", path_len, request->path,
              reply->status, (unsigned)reply->len, took_ms);
 }
