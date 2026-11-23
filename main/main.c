@@ -20,6 +20,7 @@
 #include "weather.h"
 #include "automations.h"
 #include "connectors.h"
+#include "cloud_state.h"
 
 static const char *TAG = "tikprint";
 
@@ -42,6 +43,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_ERROR_CHECK(settings_init());
+    ESP_ERROR_CHECK(cloud_state_init());   // only reads what is saved: no network
     ESP_ERROR_CHECK(clock_init());   // before Wi-Fi, so it hears "Wi-Fi got an address" and fetches internet time
     ESP_ERROR_CHECK(printer_init());
     ESP_ERROR_CHECK(weather_init());
