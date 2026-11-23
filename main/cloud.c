@@ -9,6 +9,9 @@
  * The web server asks for things by setting a flag (s_want_pair, s_want_unlink) and waking the
  * task; it reads how things stand from s_status. All of that is guarded by s_lock.
  *
+ * Who owns the printer changes only with paper in hand (see cloud.h): the pairing code goes to the
+ * ticket and nowhere else, and unlinking from the page waits for the code on a ticket of its own.
+ *
  * Printing from anywhere, once linked:
  *   every 10 s   GET jobs          "anything for me?" (this is also what shows the printer as online)
  *   for a job    GET its body      the same bytes the page POSTs to /api/print
@@ -25,6 +28,7 @@
 
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -36,6 +40,7 @@
 #include "cloud_jobs.h"
 #include "cloud_state.h"
 #include "cloud_ticket.h"
+#include "paper_code.h"
 
 static const char *TAG = "cloud";
 
@@ -51,6 +56,8 @@ static const char *TAG = "cloud";
 
 #define MSG_UNREACHABLE "Can't reach TikPrint Cloud. Check the Wi-Fi."
 #define MSG_REFUSED     "TikPrint Cloud did not accept this printer."
+#define MSG_TOO_MANY    "Too many tries. Wait a few minutes."
+#define MSG_NO_TICKET   "The ticket could not print. Check the printer."
 
 static SemaphoreHandle_t s_lock;      // guards everything below
 static SemaphoreHandle_t s_wake;      // given whenever the task should look again
@@ -59,8 +66,12 @@ static bool s_task_running;
 static bool s_want_pair;              // Upgrade was pressed
 static bool s_want_unlink;            // Reset / Unlink was pressed: tell the cloud, with s_unlink_token
 static char s_unlink_token[CLOUD_TOKEN_MAX];   // the token that was just deleted, kept only until the cloud has been told
+static char s_pair_code[CLOUD_CODE_MAX];   // while pairing: the code on the ticket. It never leaves this file
 static int64_t s_pair_until_us;       // when the pairing code runs out (board uptime)
 static int s_pair_every_s;
+static int64_t s_pair_asked_us;       // when a pairing ticket was last asked for (0 = never): see CLOUD_TICKET_EVERY_S
+static paper_code_t s_unlink_code;    // the code on the unlink ticket, while one is out
+static int64_t s_unlink_asked_us;     // when an unlink ticket was last asked for (0 = never)
 /* The print queue's task tells the cloud task that the cloud job in the queue has ended: */
 static bool s_done_ready;             // there is news
 static uint32_t s_done_ticket;        // which ticket it is about (s_in_queue.ticket)
@@ -104,13 +115,14 @@ void cloud_get_status(cloud_status_t *out)
     xSemaphoreGive(s_lock);
 }
 
-/* Change what the page is told. code and message may be NULL (= none). */
+/* Change where linking stands. code = the pairing code on the ticket (kept here, never told to the
+ * page) and message = what the page is told went wrong; both may be NULL (= none). */
 static void set_phase(cloud_phase_t phase, const char *code, const char *message)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     cloud_phase_t before = s_status.phase;
     s_status.phase = phase;
-    strlcpy(s_status.code, code ? code : "", sizeof(s_status.code));
+    strlcpy(s_pair_code, code ? code : "", sizeof(s_pair_code));
     strlcpy(s_status.message, message ? message : "", sizeof(s_status.message));
     xSemaphoreGive(s_lock);
     if (phase != before) {
@@ -167,7 +179,7 @@ static bool is_temporary(int status)
 
 /* ---------- Pairing ---------- */
 
-/* A pairing code is letters, digits and dashes: it goes into an address and onto the page as it is. */
+/* A pairing code is letters, digits and dashes: it goes into an address and onto the ticket as it is. */
 static bool code_is_plain(const char *code)
 {
     size_t n = strlen(code);
@@ -193,7 +205,7 @@ static void pair_start(void)
     const char *code = text_of(json, "code"), *link = text_of(json, "link_url");
     if (reply.status != 200) {
         ESP_LOGW(TAG, "pair/start: %d %s", reply.status, text_of(json, "error"));
-        set_phase(CLOUD_FAILED, NULL, is_temporary(reply.status) ? MSG_UNREACHABLE : MSG_REFUSED);
+        set_phase(CLOUD_FAILED, NULL, reply.status == 429 ? MSG_TOO_MANY : is_temporary(reply.status) ? MSG_UNREACHABLE : MSG_REFUSED);
     } else if (!code_is_plain(code) || strncmp(link, "https://", 8) != 0) {
         ESP_LOGW(TAG, "pair/start: the answer has no usable code or link");
         set_phase(CLOUD_FAILED, NULL, MSG_UNREACHABLE);
@@ -203,11 +215,14 @@ static void pair_start(void)
         s_pair_every_s = number_of(json, "poll_interval_s", PAIR_EVERY_S, 2, 30);
         s_pair_until_us = esp_timer_get_time() + (int64_t)lifetime_s * 1000000;
         xSemaphoreGive(s_lock);
-        set_phase(CLOUD_PAIRING, code, NULL);
-        // If the ticket cannot print (queue full, no paper), the page still shows the code to type in.
+        // The ticket is the only place the code is shown. If it cannot join the print queue (queue
+        // full, no memory) there is nothing to scan, so pairing stops here and Upgrade starts it again.
         esp_err_t err = cloud_ticket_print(link, code, (lifetime_s + 30) / 60);
-        if (err != ESP_OK) {
+        if (err == ESP_OK) {
+            set_phase(CLOUD_PAIRING, code, NULL);
+        } else {
             ESP_LOGW(TAG, "the pairing ticket did not join the print queue: %s", esp_err_to_name(err));
+            set_phase(CLOUD_FAILED, NULL, MSG_NO_TICKET);
         }
     }
     cJSON_Delete(json);
@@ -217,14 +232,14 @@ static void pair_start(void)
 /* "Am I linked yet?" Asked every few seconds while the ticket is out. */
 static void pair_ask(void)
 {
-    cloud_status_t now;
-    cloud_get_status(&now);
+    char code[CLOUD_CODE_MAX];
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(code, s_pair_code, sizeof(code));
     bool overdue = esp_timer_get_time() > s_pair_until_us + (int64_t)PAIR_GRACE_S * 1000000;
     xSemaphoreGive(s_lock);
 
     char path[80];
-    snprintf(path, sizeof(path), "/api/device/pair/status?code=%s", now.code);
+    snprintf(path, sizeof(path), "/api/device/pair/status?code=%s", code);
     cloud_reply_t reply;
     cloud_http(&(cloud_request_t){ .name = "pair/status", .path = path, .auth = CLOUD_AUTH_DEVICE, .max_bytes = JSON_MAX }, &reply);
     cJSON *json = reply_json(&reply);
@@ -272,6 +287,9 @@ static void go_local(const char *why)
     cloud_jobs_clear();
     s_in_queue.active = false;   // if that ticket is still in the queue it prints; nobody is told
     s_stuck.id[0] = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    paper_code_clear(&s_unlink_code);   // an unlink ticket that is out has nothing left to unlink
+    xSemaphoreGive(s_lock);
     set_phase(CLOUD_LOCAL, NULL, NULL);
 }
 
@@ -491,7 +509,8 @@ static int check_in(void)
 
 static esp_err_t start_task_locked(void);
 
-/* Reset / Unlink was pressed and the token is deleted already (cloud_unlink). Tell the cloud, so
+/* The code from the unlink ticket was typed in and the token is deleted already (unlink_now). Tell
+ * the cloud, so
  * that the website stops listing the printer. Whatever the answer, or with none at all, the
  * printer stays unlinked. */
 static void tell_cloud_unlinked(void)
@@ -515,22 +534,88 @@ static void tell_cloud_unlinked(void)
     }
 }
 
-void cloud_unlink(void)
+/* Unlink, here and now. Call with s_lock held. */
+static void unlink_now_locked(void)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
     // Keep the token for one last call, then delete it from the board before anything else happens.
     if (cloud_state_get_token(s_unlink_token, sizeof(s_unlink_token))) {
         s_want_unlink = true;
     }
     cloud_state_clear();
     s_want_pair = false;
+    s_pair_code[0] = 0;
     s_status = (cloud_status_t){ .phase = CLOUD_LOCAL };
     if (s_want_unlink) {
         start_task_locked();   // if it cannot start, the cloud is not told; the printer is unlinked all the same
     }
+}
+
+/* Seconds until a ticket last asked for at asked_us may be asked for again; 0 = now. */
+static int ticket_wait_s(int64_t asked_us, int64_t now_us)
+{
+    int64_t left_us = asked_us ? asked_us + (int64_t)CLOUD_TICKET_EVERY_S * 1000000 - now_us : 0;
+    return left_us > 0 ? (int)((left_us + 999999) / 1000000) : 0;
+}
+
+esp_err_t cloud_unlink_request(int *expires_in_s, int *wait_s)
+{
+    *expires_in_s = *wait_s = 0;
+    if (!cloud_state_is_linked()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    int64_t now_us = esp_timer_get_time();
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *wait_s = ticket_wait_s(s_unlink_asked_us, now_us);
+    if (*wait_s > 0) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_NOT_FINISHED;
+    }
+    int64_t asked_before_us = s_unlink_asked_us;
+    s_unlink_asked_us = now_us ? now_us : 1;   // taken now, so two requests at once print one ticket
+    paper_code_clear(&s_unlink_code);          // the code before stops working, whether or not the new ticket prints
     xSemaphoreGive(s_lock);
-    xSemaphoreGive(s_wake);
-    ESP_LOGW(TAG, "Reset / Unlink pressed: token deleted, back to local only");
+
+    // The code is made and printed first, and only checked against once its ticket is in the queue.
+    paper_code_t fresh;
+    paper_code_new(&fresh, esp_random, now_us);
+    esp_err_t err = cloud_ticket_print_unlink(fresh.code, (PAPER_CODE_LIFE_S + 30) / 60);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (err == ESP_OK) {
+        s_unlink_code = fresh;
+        *expires_in_s = paper_code_seconds_left(&fresh, now_us);
+    } else {
+        s_unlink_asked_us = asked_before_us;   // no paper was used: it may be asked for again at once
+    }
+    xSemaphoreGive(s_lock);
+    paper_code_clear(&fresh);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "the unlink ticket did not join the print queue: %s", esp_err_to_name(err));
+        return err == ESP_ERR_NO_MEM ? ESP_ERR_NO_MEM : ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "Reset / Unlink pressed: a ticket with a code is printing, good for %d s", PAPER_CODE_LIFE_S);   // the code is never logged
+    return ESP_OK;
+}
+
+esp_err_t cloud_unlink_confirm(const char *code, int *tries_left)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    paper_code_result_t result = paper_code_check(&s_unlink_code, code, esp_timer_get_time(), tries_left);
+    if (result == PAPER_CODE_RIGHT) {
+        unlink_now_locked();
+    }
+    xSemaphoreGive(s_lock);
+    switch (result) {
+    case PAPER_CODE_RIGHT:
+        xSemaphoreGive(s_wake);
+        ESP_LOGW(TAG, "Reset / Unlink confirmed with the code on the ticket: token deleted, back to local only");
+        return ESP_OK;
+    case PAPER_CODE_NONE:
+        return ESP_ERR_NOT_FOUND;
+    default:
+        ESP_LOGW(TAG, "Reset / Unlink: wrong code, %d %s left%s", *tries_left, *tries_left == 1 ? "try" : "tries",
+                 result == PAPER_CODE_CANCELLED ? ": the code is cancelled" : "");
+        return ESP_ERR_INVALID_ARG;
+    }
 }
 
 /* ---------- The task ---------- */
@@ -592,15 +677,25 @@ static esp_err_t start_task_locked(void)
     return ESP_OK;
 }
 
-esp_err_t cloud_pair(void)
+esp_err_t cloud_pair(int *wait_s)
 {
+    *wait_s = 0;
     if (cloud_state_is_linked()) {
         return ESP_ERR_INVALID_STATE;
     }
+    int64_t now_us = esp_timer_get_time();
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    // Every Upgrade prints a ticket, and anyone on the network can press it: not too often.
+    *wait_s = ticket_wait_s(s_pair_asked_us, now_us);
+    if (*wait_s > 0) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_NOT_FINISHED;
+    }
     esp_err_t err = start_task_locked();
     if (err == ESP_OK) {
+        s_pair_asked_us = now_us ? now_us : 1;
         s_want_pair = true;
+        s_pair_code[0] = 0;   // the code of the ticket before stops being asked about
         s_status = (cloud_status_t){ .phase = CLOUD_STARTING };
     }
     xSemaphoreGive(s_lock);

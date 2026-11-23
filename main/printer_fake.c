@@ -109,12 +109,14 @@ static void remember(const printer_job_t *job)
     free(s_body);
     free(s_source);
     free(s_image);
+    // A secret ticket (it carries a pairing or unlink code) is remembered by number and title only:
+    // /api/last-ticket is open to everyone on the network, and the code is for whoever holds the paper.
     s_title = psram_strdup(job->title);
-    s_body = psram_strdup(job->body);
+    s_body = psram_strdup(job->secret ? "" : job->body);
     s_source = psram_strdup(job->source);
     s_image = NULL;
     uint16_t rows = 0;
-    if (job->image && job->image_rows) {
+    if (job->image && job->image_rows && !job->secret) {
         size_t n = (size_t)job->image_rows * PRINTER_WIDTH_BYTES;
         s_image = psram_alloc(n);
         if (s_image) {
@@ -132,6 +134,7 @@ static void remember(const printer_job_t *job)
         .text_in_image = s_image && job->text_in_image,
         .image_first = s_image && job->image_first,
         .no_location = job->no_location,
+        .secret = job->secret,
     };
     s_have_last = true;
     fake_last_job_unlock();
@@ -154,11 +157,15 @@ static esp_err_t fake_print(const printer_job_t *job)
     if (job->title[0]) {
         ESP_LOGI(TAG, "| TITLE: %s", job->title);
     }
-    if (job->body[0]) {
-        log_text_lines(job->body);
-    }
-    if (job->image && job->image_rows) {
-        log_image_preview(job->image, job->image_rows);
+    if (job->secret) {
+        ESP_LOGI(TAG, "| (not shown here: this ticket carries a code for whoever is at the printer)");
+    } else {
+        if (job->body[0]) {
+            log_text_lines(job->body);
+        }
+        if (job->image && job->image_rows) {
+            log_image_preview(job->image, job->image_rows);
+        }
     }
     ESP_LOGI(TAG, "+--------------------------- cut here --------------------------");
 
