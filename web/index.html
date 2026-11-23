@@ -297,6 +297,11 @@ body.offline #offline{display:flex}
 body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .pane,body.offline .toast{display:none!important}
 
 @media (max-width:500px){ .paper,.drop,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
+/* "Upgrade to Pro" is the first label to go when the bar gets tight: on smaller screens, and on medium ones while the Connectors pane takes its share */
+/* ... and after that a long Wi-Fi name is cut short with "…" rather than wrapping onto a second line */
+.menubar .mitem{white-space:nowrap;flex-shrink:0} .menubar #wifiBtn{flex-shrink:1;min-width:0} #linkLabel{overflow:hidden;text-overflow:ellipsis} .menubar .led{flex-shrink:0}
+@media (max-width:760px){ #proBtn .t{display:none} }
+@media (min-width:861px) and (max-width:1100px){ body.paneopen #proBtn .t{display:none} }
 </style>
 </head>
 <body>
@@ -310,6 +315,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
   <button class="mitem" id="wifiBtn"><span class="led off" id="linkLed"></span><span class="t" id="linkLabel">Connecting…</span></button>
   <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
+  <button class="mitem" id="proBtn" title="Upgrade to Pro"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.2 5.6 5.8.4-4.5 3.8 1.5 5.7L12 15.9 7 19l1.5-5.7L4 9.5l5.8-.4z"/></svg><span class="t">Upgrade to Pro</span></button>
   <button class="mitem" id="connBtn" title="Connectors" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
@@ -501,6 +507,9 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
 })();
 
 const $=id=>document.getElementById(id);
+/* TikPrint Cloud: where Pro lives. The printer never unlocks Pro itself; every "Upgrade to Pro" on this page just opens this site. */
+const CLOUD_URL='https://app.ticketprint.com';
+function openCloud(){window.open(CLOUD_URL,'_blank','noopener')}
 let ticket=1, wifi=null;
 const pad=n=>'#'+String(n).padStart(4,'0');
 /* ---------- Ticket header ---------- */
@@ -836,6 +845,7 @@ function showPane(on){
   $('connPop').classList.toggle('open',on); document.body.classList.toggle('paneopen',on);
   $('connBtn').classList.toggle('on',on); $('connBtn').setAttribute('aria-expanded',on);
 }
+$('proBtn').onclick=openCloud;
 $('connBtn').onclick=()=>showPane(!$('connPop').classList.contains('open'));
 $('connClose').onclick=()=>showPane(false);
 $('connBack').onclick=()=>showConn(false);
@@ -1427,7 +1437,7 @@ $('wxAdd').onkeydown=async e=>{
   const town=(await findTowns(v))[0];   // Enter takes the first town suggested
   if(town)addPlace({city:town},town); else showPlaceNote(`No town called “${v}” found.`,true);
 };
-$('wxPro').onclick=()=>toast('Pro isn’t available yet');
+$('wxPro').onclick=openCloud;
 $('wxPrint').onclick=printWeather;
 async function printWeather(){
   if(weatherBusy)return;
