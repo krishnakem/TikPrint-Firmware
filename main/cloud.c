@@ -3,11 +3,22 @@
  * TikPrint Cloud repo.
  *
  * Calling the cloud takes seconds and needs a deep stack, so it all happens on one background
- * task, "cloud". That task only exists while there is something to do: while pairing. A printer
- * that is not linked has no such task and makes no calls.
+ * task, "cloud". That task only exists while there is something to do: while pairing, and for as
+ * long as the printer is linked. A printer that is not linked has no such task and makes no calls.
  *
  * The web server asks for things by setting a flag (s_want_pair) and waking the task; it reads
  * how things stand from s_status. Both are guarded by s_lock.
+ *
+ * Printing from anywhere, once linked:
+ *   every 10 s   GET jobs          "anything for me?" (this is also what shows the printer as online)
+ *   for a job    GET its body      the same bytes the page POSTs to /api/print
+ *                api_print_body    into the print queue, the very path a local print takes
+ *   when the ticket is out         POST ack "printed" (or "failed" if the printer gave up)
+ * One cloud job is in the print queue at a time, oldest first, so cloud jobs never crowd out
+ * local prints. A job that is only waiting (for its turn, for paper, for the cover) is not
+ * reported: the report goes out when it has really printed.
+ * Jobs already finished are remembered (cloud_jobs.c): if one is offered again, its report was
+ * lost, so it is reported again and not printed again.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -19,8 +30,10 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "api.h"
 #include "cloud.h"
 #include "cloud_http.h"
+#include "cloud_jobs.h"
 #include "cloud_state.h"
 #include "cloud_ticket.h"
 
@@ -32,6 +45,9 @@ static const char *TAG = "cloud";
 #define PAIR_EVERY_S     3       // "am I linked yet?" this often, unless the cloud says otherwise
 #define PAIR_LIFETIME_S  600     // how long a pairing code is good for, unless the cloud says otherwise
 #define PAIR_GRACE_S     20      // keep asking this long after the code should have run out: the cloud has the last word
+#define POLL_EVERY_S     10      // check in for jobs this often, unless the cloud says otherwise
+#define POLL_SLOWEST_S   60      // when the cloud cannot be reached, the wait doubles each time, up to this
+#define DOWNLOAD_TRIES   5       // a print body that will not download is given up on after this many check-ins
 
 #define MSG_UNREACHABLE "Can't reach TikPrint Cloud. Check the Wi-Fi."
 #define MSG_REFUSED     "TikPrint Cloud did not accept this printer."
@@ -43,6 +59,24 @@ static bool s_task_running;
 static bool s_want_pair;              // Upgrade was pressed
 static int64_t s_pair_until_us;       // when the pairing code runs out (board uptime)
 static int s_pair_every_s;
+/* The print queue's task tells the cloud task that the cloud job in the queue has ended: */
+static bool s_done_ready;             // there is news
+static uint32_t s_done_ticket;        // which ticket it is about (s_in_queue.ticket)
+static esp_err_t s_done_result;       // ESP_OK = printed
+
+/* The rest is only touched by the cloud task. */
+static int s_poll_every_s = POLL_EVERY_S;
+static int s_poll_failures;           // check-ins in a row that got no answer
+static struct {
+    bool active;                      // a cloud job is in the print queue (waiting or printing)
+    char id[CLOUD_JOB_ID_MAX];
+    uint32_t ticket;                  // a number of our own for it, so that old news is not taken for new
+} s_in_queue;
+static uint32_t s_ticket_counter;
+static struct {
+    char id[CLOUD_JOB_ID_MAX];        // the job whose print body would not download
+    int tries;
+} s_stuck;
 
 const char *cloud_phase_name(cloud_phase_t phase)
 {
@@ -223,6 +257,233 @@ static void pair_ask(void)
     cloud_reply_free(&reply);
 }
 
+/* ---------- Printing from anywhere ---------- */
+
+/* The cloud says this token is not valid any more: the owner unlinked the printer on the website,
+ * or linked it again elsewhere. Delete the token and go back to local only: from here the board
+ * calls nobody until Upgrade is pressed again. */
+static void go_local(const char *why)
+{
+    ESP_LOGW(TAG, "%s: token deleted, back to local only", why);
+    cloud_state_clear();
+    cloud_jobs_clear();
+    s_in_queue.active = false;   // if that ticket is still in the queue it prints; nobody is told
+    s_stuck.id[0] = 0;
+    set_phase(CLOUD_LOCAL, NULL, NULL);
+}
+
+/* Is this answer the cloud saying "you are not linked any more"? */
+static bool says_unlinked(const cloud_reply_t *reply)
+{
+    cJSON *json = reply->status == 401 ? reply_json(reply) : NULL;
+    bool unlinked = json && strcmp(text_of(json, "error"), "invalid_token") == 0;
+    cJSON_Delete(json);
+    return unlinked;
+}
+
+/* A job ID goes into an address: letters, digits and dashes only. */
+static bool job_id_is_plain(const char *id)
+{
+    size_t n = strlen(id);
+    if (n < 8 || n >= CLOUD_JOB_ID_MAX) {
+        return false;
+    }
+    for (const char *p = id; *p; p++) {
+        bool ok = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Called by the print queue, on its task, when the cloud job has printed or failed. */
+static void on_print_done(void *ctx, esp_err_t result)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_done_ready = true;
+    s_done_ticket = (uint32_t)(uintptr_t)ctx;
+    s_done_result = result;
+    xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_wake);   // report back now, not at the next check-in
+}
+
+/* Has the cloud job in the print queue ended? Then note how, to be reported. */
+static void collect_print_done(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ready = s_done_ready;
+    uint32_t ticket = s_done_ticket;
+    esp_err_t result = s_done_result;
+    s_done_ready = false;
+    xSemaphoreGive(s_lock);
+    if (ready && s_in_queue.active && ticket == s_in_queue.ticket) {
+        ESP_LOGI(TAG, "cloud job %.8s %s", s_in_queue.id, result == ESP_OK ? "printed" : "failed to print");
+        cloud_jobs_finished(s_in_queue.id, result == ESP_OK ? CLOUD_JOB_PRINTED : CLOUD_JOB_NOT_PRINTED);
+        s_in_queue.active = false;
+    }
+}
+
+/* Report every finished job the cloud has not heard about. A report that does not get through
+ * stays for the next check-in. False if the printer turned out to be unlinked. */
+static bool send_reports(const char *token)
+{
+    char id[CLOUD_JOB_ID_MAX], path[96], json[160];
+    cloud_job_end_t end;
+    while (cloud_jobs_next_unreported(id, &end)) {
+        snprintf(path, sizeof(path), "/api/device/jobs/%s/ack", id);
+        if (end == CLOUD_JOB_PRINTED) {
+            strcpy(json, "{\"status\":\"printed\"}");
+        } else {
+            snprintf(json, sizeof(json), "{\"status\":\"failed\",\"error\":\"%s\"}", cloud_job_end_message(end));
+        }
+        cloud_reply_t reply;
+        cloud_http(&(cloud_request_t){ .post = true, .path = path, .auth = CLOUD_AUTH_TOKEN, .token = token,
+                                       .json = json, .max_bytes = JSON_MAX }, &reply);
+        bool unlinked = says_unlinked(&reply);
+        int status = reply.status;
+        cloud_reply_free(&reply);
+        if (unlinked) {
+            go_local("the cloud refused the token");
+            return false;
+        }
+        if (status == 200 || status == 404 || status == 400) {
+            cloud_jobs_reported(id);   // heard; or the cloud has dropped the job (404) and there is nobody to tell
+        } else {
+            ESP_LOGW(TAG, "the report on job %.8s did not get through (%d): it goes again at the next check-in", id, status);
+            break;
+        }
+    }
+    return true;
+}
+
+/* A job's print body would not download. Give up on the job after DOWNLOAD_TRIES check-ins. */
+static void download_failed(const char *id)
+{
+    if (strcmp(s_stuck.id, id) != 0) {
+        strlcpy(s_stuck.id, id, sizeof(s_stuck.id));
+        s_stuck.tries = 0;
+    }
+    if (++s_stuck.tries >= DOWNLOAD_TRIES) {
+        ESP_LOGW(TAG, "cloud job %.8s: giving up on the download", id);
+        cloud_jobs_finished(id, CLOUD_JOB_NO_DOWNLOAD);
+        s_stuck.id[0] = 0;
+    }
+}
+
+/* Download a new job and put it in the print queue. False if the printer turned out to be unlinked. */
+static bool start_job(const char *token, const char *id, int size)
+{
+    if (size > API_PRINT_BODY_MAX) {
+        cloud_jobs_finished(id, CLOUD_JOB_TOO_LARGE);
+        return true;
+    }
+    char path[96];
+    snprintf(path, sizeof(path), "/api/device/jobs/%s/body", id);
+    cloud_reply_t reply;
+    cloud_http(&(cloud_request_t){ .path = path, .auth = CLOUD_AUTH_TOKEN, .token = token,
+                                   .max_bytes = API_PRINT_BODY_MAX }, &reply);
+    if (says_unlinked(&reply)) {
+        cloud_reply_free(&reply);
+        go_local("the cloud refused the token");
+        return false;
+    }
+    if (reply.status == 404) {
+        ESP_LOGI(TAG, "cloud job %.8s is gone (finished or dropped): forgotten", id);
+    } else if (reply.status != 200) {
+        download_failed(id);
+    } else if (reply.too_big) {
+        cloud_jobs_finished(id, CLOUD_JOB_TOO_LARGE);
+    } else if (size > 0 && reply.len != (size_t)size) {
+        // The connection ended early, or these are not the bytes the job list promised.
+        ESP_LOGW(TAG, "cloud job %.8s: got %u bytes, expected %d", id, (unsigned)reply.len, size);
+        download_failed(id);
+    } else {
+        // The same bytes the page sends, into the same code: a cloud print and a local print come out alike.
+        printer_ticket_t ticket;
+        const char *error = "", *message = "";
+        uint32_t ours = ++s_ticket_counter;
+        esp_err_t err = api_print_body((const uint8_t *)reply.body, reply.len, on_print_done, (void *)(uintptr_t)ours,
+                                       &ticket, &error, &message);
+        if (err == ESP_OK) {
+            s_in_queue.active = true;
+            s_in_queue.ticket = ours;
+            strlcpy(s_in_queue.id, id, sizeof(s_in_queue.id));
+            ESP_LOGI(TAG, "cloud job %.8s (%u bytes) is ticket #%04u, position %d in the queue", id,
+                     (unsigned)reply.len, (unsigned)ticket.number, ticket.position);
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            ESP_LOGW(TAG, "cloud job %.8s cannot print: %s (%s)", id, message, error);
+            cloud_jobs_finished(id, CLOUD_JOB_UNREADABLE);
+        } else {
+            // The queue is full or memory is short: the job stays on the cloud, and the next check-in tries again.
+            ESP_LOGW(TAG, "cloud job %.8s has to wait: %s", id, message);
+        }
+    }
+    cloud_reply_free(&reply);
+    return true;
+}
+
+/* One check-in. Returns how many seconds to wait before the next. */
+static int check_in(void)
+{
+    char token[CLOUD_TOKEN_MAX];
+    if (!cloud_state_get_token(token, sizeof(token))) {
+        set_phase(CLOUD_LOCAL, NULL, NULL);   // the token is gone: nothing to check in with
+        return 0;
+    }
+    collect_print_done();
+    if (!send_reports(token)) {
+        return 0;
+    }
+    cloud_reply_t reply;
+    cloud_http(&(cloud_request_t){ .path = "/api/device/jobs", .auth = CLOUD_AUTH_TOKEN, .token = token,
+                                   .max_bytes = JSON_MAX }, &reply);
+    if (says_unlinked(&reply)) {
+        cloud_reply_free(&reply);
+        go_local("the cloud refused the token");
+        return 0;
+    }
+    cJSON *json = reply.status == 200 ? reply_json(&reply) : NULL;
+    cloud_reply_free(&reply);
+    if (!json) {
+        // No network, a timeout, a 5xx, a 429, an answer that is not JSON: nothing is wrong with the
+        // link. Keep the token and try again, a little later each time.
+        s_poll_failures = s_poll_failures < 8 ? s_poll_failures + 1 : 8;
+        int wait = s_poll_every_s << (s_poll_failures - 1);
+        return wait > POLL_SLOWEST_S ? POLL_SLOWEST_S : wait;
+    }
+    s_poll_failures = 0;
+    s_poll_every_s = number_of(json, "poll_interval_s", POLL_EVERY_S, 3, 300);
+
+    bool linked = true, more_to_report = false;
+    const cJSON *job;
+    cJSON_ArrayForEach(job, cJSON_GetObjectItem(json, "jobs")) {   // oldest first
+        const char *id = text_of(job, "id");
+        cloud_job_end_t end;
+        if (!job_id_is_plain(id)) {
+            continue;
+        }
+        if (cloud_jobs_find(id, &end)) {
+            // Finished already, yet offered again: the report was lost. Report again; do not print again.
+            ESP_LOGI(TAG, "cloud job %.8s is offered again: reporting it again, not printing it again", id);
+            cloud_jobs_report_again(id);
+            more_to_report = true;
+        } else if (!s_in_queue.active) {
+            linked = start_job(token, id, number_of(job, "size", 0, 0, API_PRINT_BODY_MAX + 1));
+            if (!linked) {
+                break;
+            }
+            more_to_report = more_to_report || cloud_jobs_find(id, &end);   // it could not print: say so now
+        }
+        // else: a cloud job is in the print queue. This one waits its turn on the cloud.
+    }
+    cJSON_Delete(json);
+    if (linked && more_to_report) {
+        linked = send_reports(token);
+    }
+    return linked ? s_poll_every_s : 0;
+}
+
 /* ---------- The task ---------- */
 
 static void cloud_task(void *arg)
@@ -242,6 +503,11 @@ static void cloud_task(void *arg)
             wait_s(every_s);
             if (phase_now() == CLOUD_PAIRING) {
                 pair_ask();
+            }
+        } else if (phase == CLOUD_LINKED) {
+            int wait = check_in();
+            if (wait > 0) {
+                wait_s(wait);   // or until the ticket has printed, or Upgrade is pressed
             }
         } else {
             // Nothing left to do: close the connection and end the task. From here the board calls
@@ -296,6 +562,14 @@ esp_err_t cloud_init(void)
         return ESP_ERR_NO_MEM;
     }
     s_pair_every_s = PAIR_EVERY_S;
-    s_status.phase = cloud_state_is_linked() ? CLOUD_LINKED : CLOUD_LOCAL;
-    return ESP_OK;
+    cloud_jobs_init();
+    if (!cloud_state_is_linked()) {
+        s_status.phase = CLOUD_LOCAL;   // no token: no task, no calls
+        return ESP_OK;
+    }
+    s_status.phase = CLOUD_LINKED;      // linked: carry on checking in with the saved token
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = start_task_locked();
+    xSemaphoreGive(s_lock);
+    return err;
 }
