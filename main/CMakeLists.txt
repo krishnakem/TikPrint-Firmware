@@ -4,7 +4,7 @@ idf_component_register(
          "fw_update.c" "fw_github.c"
          "printer.c" "print_queue.c" "printer_fake.c" "printer_thermal.c"
          "zip_table.c" "city_table.c" "weather.c" "weather_ticket.c" "weather_icons.c" "automations.c"
-         "ticket_draw.c" "ticket_header.c" "weather_render.c"
+         "ticket_draw.c" "ticket_header.c" "weather_render.c" "qr_ticket.c"
          "cloud_state.c" "cloud_identity.c" "cloud_http.c" "cloud_ticket.c" "cloud_jobs.c" "cloud.c" "paper_code.c"
          "cloud_realtime.c" "cloud_update.c"
     INCLUDE_DIRS "."

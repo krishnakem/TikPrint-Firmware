@@ -1,6 +1,7 @@
 #!/bin/sh
 # Try board code on a computer (see README.txt).
 #   run.sh code
+#   run.sh qr [folder for the pictures]
 #   run.sh ticket <app> <reply.json> [out.png] [font] [size 0-2]
 set -e
 fw=$(cd "$(dirname "$0")/../.." && pwd)
@@ -18,6 +19,14 @@ case "$1" in
 code)
     cc $flags -o "$out/test_code" $here/test_code.c main/paper_code.c
     "$out/test_code"
+    ;;
+qr)
+    qrlib=managed_components/espressif__qrcode
+    cc $flags -I$qrlib/include -I$qrlib -o "$out/test_qr" $here/test_qr.c main/qr_ticket.c main/ticket_draw.c \
+        $qrlib/esp_qrcode_main.c $qrlib/esp_qrcode_wrapper.c $qrlib/qrcodegen.c $here/fonts.S
+    "$out/test_qr" "${2:-$out}"
+    for f in "${2:-$out}"/qr_*.pbm; do python3 $here/pbm_to_png.py "$f" "${f%.pbm}.png"; done
+    echo "QR tickets drawn: ${2:-$out}/qr_*.png"
     ;;
 ticket)
     png=${4:-$out/ticket.png}

@@ -133,6 +133,21 @@ main{position:relative;z-index:1;display:flex;flex-direction:column;align-items:
 .drop{width:var(--col);margin-top:22px;height:76px;border:1.5px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-size:14px;transition:.15s;cursor:pointer;background:var(--bg)}
 .drop:hover,.drop.over{border-color:var(--ink);color:var(--ink)}
 .drop input{display:none}
+/* The drop box and the QR button side by side, and the QR panel that opens under them */
+.droprow{width:var(--col);margin-top:22px;display:flex;gap:10px}
+.droprow .drop{width:auto;margin-top:0;flex:1;min-width:0}
+.droprow .qrbtn{flex:none;width:96px;border-style:solid}
+.droprow .qrbtn.on{border-color:var(--ink);color:var(--ink)}
+.qr{width:var(--col);margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--bg);display:none;flex-direction:column;gap:8px}
+.qr.on{display:flex}
+.qr input{width:100%;height:36px;border:1px solid var(--line);border-radius:8px;background:transparent;padding:0 10px;font-size:14px;outline:none}
+.qr input::placeholder{color:var(--muted)}
+.qr input:focus{border-color:var(--ink)}
+.qr input:disabled{opacity:.5}
+.qr [hidden]{display:none}
+.qr .qrow{display:flex;align-items:center;gap:8px}
+.qr .qrow .seg{flex:1}
+.qr .print{height:34px}
 
 /* action row */
 .row{width:var(--col);margin-top:12px;display:flex;align-items:center;justify-content:center;gap:8px}
@@ -323,7 +338,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
 body.offline .logo .led,body.offline .logo .stat{display:none}
 body.offline .logo{pointer-events:none}
 
-@media (max-width:500px){ .paper,.drop,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
+@media (max-width:500px){ .paper,.drop,.droprow,.qr,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
 /* The TikPrint Cloud button is words only, so it never loses its label: when the bar gets tight (smaller screens, and medium ones while the Connectors pane takes its share) it is the first to shrink, to its short label ("Cloud") */
 /* ... and after that the words next to the logo's dot are cut short with "…" rather than wrapping onto a second line */
 .menubar .mitem{white-space:nowrap;flex-shrink:0} .menubar .led{flex-shrink:0}
@@ -491,12 +506,31 @@ body.offline .logo{pointer-events:none}
     <div class="p-src" id="pSrc"><span id="srcName"></span><button id="rmSrc">clear</button></div>
   </div>
 
-  <!-- Upload area -->
-  <label class="drop" id="drop">
-    <input type="file" id="file" accept="image/jpeg,image/png,image/svg+xml,.svg,application/pdf">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-    Drop or paste JPG, PNG, SVG, or PDF
-  </label>
+  <!-- Upload area, and beside it the QR code maker -->
+  <div class="droprow">
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="image/jpeg,image/png,image/svg+xml,.svg,application/pdf">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      Drop or paste JPG, PNG, SVG, or PDF
+    </label>
+    <button class="drop qrbtn" id="qrBtn" aria-expanded="false" aria-controls="qr">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="6" height="6" rx="1"/><rect x="14.5" y="3.5" width="6" height="6" rx="1"/><rect x="3.5" y="14.5" width="6" height="6" rx="1"/><path d="M14.5 14.5h2.5v2.5M20.5 14.5v0M14.5 20.5h2.5M20.5 17.5v3"/></svg>
+      QR
+    </button>
+  </div>
+  <!-- A QR code: the board makes it from the words sent (POST /api/print/qr). A link, or a Wi-Fi network for guests to join -->
+  <div class="qr" id="qr">
+    <div class="seg" id="qrMode" role="group" aria-label="What the code is for"><button data-m="link" class="on">Link</button><button data-m="wifi">Wi-Fi</button></div>
+    <input type="text" id="qrData" maxlength="2000" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://" aria-label="Link or text">
+    <input type="text" id="qrCaption" maxlength="120" autocomplete="off" placeholder="Caption (optional)" aria-label="Caption, printed under the code">
+    <input type="text" id="qrSsid" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Network name" aria-label="Wi-Fi network name" hidden>
+    <input type="text" id="qrPass" maxlength="63" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Password" aria-label="Wi-Fi password" hidden>
+    <div class="seg" id="qrSec" role="group" aria-label="Wi-Fi security" hidden><button data-t="WPA" class="on">WPA</button><button data-t="WEP">WEP</button><button data-t="nopass">None</button></div>
+    <div class="qrow">
+      <div class="seg" id="qrSize" role="group" aria-label="Size of the code"><button data-s="small">Small</button><button data-s="medium" class="on">Medium</button><button data-s="full">Full width</button></div>
+      <button class="print" id="qrPrint">Print QR</button>
+    </div>
+  </div>
 
   <!-- Print -->
   <div class="row">
@@ -522,7 +556,7 @@ body.offline .logo{pointer-events:none}
   const c=document.getElementById('grid'), g=c.getContext('2d');
   const m={x:-9999,y:-9999,sx:-9999,sy:-9999,active:0};
   let base=[0,0,0],hot=[0,0,0],W=0,H=0,dpr=1; const SP=16,R=150;
-  const SOLID='.tools,.paper,.drop,.print,.pop.open,.pane.open,.toast.on,body.offline #offline .card';
+  const SOLID='.tools,.paper,.drop,.qr.on,.print,.pop.open,.pane.open,.toast.on,body.offline #offline .card';
   const hex=v=>{v=v.trim().replace('#','');return[0,2,4].map(i=>parseInt(v.slice(i,i+2),16))};
   const colors=()=>{const s=getComputedStyle(document.documentElement);base=hex(s.getPropertyValue('--dot'));hot=hex(s.getPropertyValue('--dot-hot'))};
   const size=()=>{dpr=Math.min(devicePixelRatio,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr};
@@ -2070,6 +2104,42 @@ async function doPrint(){
 }
 $('printBtn').onclick=doPrint;
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))doPrint()});
+
+/* ---------- QR codes ----------
+   The page sends only the job: {"data","size","caption"} to POST /api/print/qr (see print_qr_post in api.c).
+   The board makes the code and prints it through the same queue as every other ticket.
+   A Wi-Fi code is a text every phone's camera understands:  WIFI:S:<name>;T:<WPA|WEP|nopass>;P:<password>;;
+   In the name and the password, the characters \ ; , : " get a \ in front. */
+const wifiEsc=t=>t.replace(/([\\;,:"])/g,'\\$1');
+const wifiText=(ssid,type,pass)=>`WIFI:S:${wifiEsc(ssid)};T:${type};P:${type==='nopass'?'':wifiEsc(pass)};;`;
+const segPick=(id,key)=>{$(id).onclick=e=>{const b=e.target.closest('button');if(!b)return;$(id).querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));if(key)key(b)}};
+const segOn=id=>$(id).querySelector('.on').dataset;
+function qrShowMode(){
+  const wifi=segOn('qrMode').m==='wifi';
+  ['qrData','qrCaption'].forEach(i=>$(i).hidden=wifi);
+  ['qrSsid','qrPass','qrSec'].forEach(i=>$(i).hidden=!wifi);
+  $('qrPass').disabled=segOn('qrSec').t==='nopass';
+  $('qrPass').placeholder=$('qrPass').disabled?'No password':'Password';
+}
+segPick('qrMode',qrShowMode); segPick('qrSec',qrShowMode); segPick('qrSize');
+$('qrBtn').onclick=()=>{const on=$('qr').classList.toggle('on');$('qrBtn').classList.toggle('on',on);$('qrBtn').setAttribute('aria-expanded',on);if(on)$(segOn('qrMode').m==='wifi'?'qrSsid':'qrData').focus()};
+let qrBusy=false;
+async function printQr(){
+  if(qrBusy||offline)return;
+  const wifi=segOn('qrMode').m==='wifi', type=segOn('qrSec').t, ssid=$('qrSsid').value, pass=$('qrPass').value, link=$('qrData').value.trim();
+  if(wifi?!ssid:!link){$(wifi?'qrSsid':'qrData').focus();return}
+  if(wifi&&type!=='nopass'&&!pass){$('qrPass').focus();return}
+  const job=wifi?{data:wifiText(ssid,type,pass),size:segOn('qrSize').s,caption:'Wi-Fi: '+ssid}:{data:link,size:segOn('qrSize').s,caption:$('qrCaption').value.trim()};
+  qrBusy=true; $('qrPrint').disabled=true;
+  let r;
+  try{r=await api('/api/print/qr',job,20000)}catch(e){r={ok:false,message:'Couldn’t reach the printer'}}
+  qrBusy=false; $('qrPrint').disabled=false;
+  if(!r.ok){toast(r.message||'Printing failed');return}
+  toast(r.queued?`Queued ${pad(r.number)}, ${nth(r.position+1)} in line`:`Printed ${pad(r.number)}`+(viaUsb?' over USB-C':''));
+  ticket=r.ticket_count+1; showDate();
+}
+$('qrPrint').onclick=printQr;
+$('qr').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.stopPropagation();printQr()}});
 
 let tt;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1800)}
 </script>

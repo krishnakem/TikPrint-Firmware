@@ -9,6 +9,7 @@
  *   POST /api/wifi/connect   {"ssid": "...", "password": "..."}
  *   POST /api/wifi/forget
  *   POST /api/print          put a ticket in the print queue (binary body, see print_post)
+ *   POST /api/print/qr       {"data": "https://...", "size": "small"|"medium"|"full", "caption": "..."}: print a QR code
  *   GET  /api/diag/printer-test?baud=N  print one test line (optionally at another serial speed)
  *   GET  /api/diag/printer-status       ask the printer how it is; raw answer bytes + what they mean
  *   GET  /api/last-ticket    the last ticket that started printing (JSON)
@@ -58,6 +59,7 @@
 #include "zip_table.h"
 #include "city_table.h"
 #include "ticket_draw.h"
+#include "qr_ticket.h"
 
 static const char *TAG = "api";
 
@@ -670,7 +672,9 @@ static esp_err_t wifi_forget_post(httpd_req_t *req)
  *   2. N bytes: JSON {"title": "...", "body": "...", "source": "...",
  *                     "image": {"width": 576, "height": H},   (optional)
  *                     "text_in_image": true,                  (optional, see below)
- *                     "parts": [...]}                         (optional, see below)
+ *                     "parts": [...],                         (optional, see below)
+ *                     "qr": {"data": "...", "size": "medium", "caption": "..."}}   (optional: a QR code the board
+ *                                                             makes and prints below the rest, see qr_ticket.h)
  *   3. if "image" is present: H * 72 bytes of raw image bits.
  *      "text_in_image" means the page drew the text at the top of the image, in its own
  *      font. title/body/source are then only kept for the log and /api/last-ticket.
@@ -769,6 +773,7 @@ esp_err_t api_print_body(const uint8_t *buf, size_t len, printer_done_fn done, v
     esp_err_t ret = ESP_OK;
     uint8_t *layout = NULL;
     cJSON *meta = NULL;
+    ticket_canvas_t qr_canvas = { 0 };
     if (len < 4 || len > MAX_PRINT_BODY) {
         REFUSE(ESP_ERR_INVALID_ARG, "bad_size", "The ticket is empty or too large");
     }
@@ -809,6 +814,40 @@ esp_err_t api_print_body(const uint8_t *buf, size_t len, printer_done_fn done, v
         job.layout = layout;
         job.text_in_image = true;   // the page laid the whole ticket out, text included
     }
+    // "qr": a QR code the board makes itself, printed below whatever else the ticket holds. See qr_ticket.h.
+    const cJSON *jqr = cJSON_GetObjectItem(meta, "qr");
+    if (cJSON_IsObject(jqr)) {
+        const cJSON *jdata = cJSON_GetObjectItem(jqr, "data");
+        const cJSON *jsize = cJSON_GetObjectItem(jqr, "size");
+        const cJSON *jcaption = cJSON_GetObjectItem(jqr, "caption");
+        qr_job_t qr = { .size = QR_SIZE_MEDIUM, .caption = cJSON_IsString(jcaption) ? jcaption->valuestring : "" };
+        if (!cJSON_IsString(jdata) || !jdata->valuestring[0] ||
+            (jsize && !(cJSON_IsString(jsize) && qr_size_from_name(jsize->valuestring, &qr.size)))) {
+            REFUSE(ESP_ERR_INVALID_ARG, "bad_qr", "The QR code could not be read");
+        }
+        qr.data = jdata->valuestring;
+        // A ticket that is the code and nothing else gets its header line drawn above the code.
+        bool alone = !job.image && !layout && !job.title[0] && !job.body[0];
+        bool lettered = false;
+        esp_err_t qerr = strlen(qr.data) > QR_DATA_MAX ? ESP_ERR_INVALID_SIZE
+                         : qr_ticket_render(&qr, job.image, job.image_rows, alone, &qr_canvas, &lettered);
+        if (qerr == ESP_ERR_INVALID_SIZE) {
+            REFUSE(ESP_ERR_INVALID_ARG, "qr_too_long", "That's too long for a QR code");
+        }
+        if (qerr != ESP_OK) {
+            REFUSE(ESP_ERR_NO_MEM, "no_memory", "The printer is out of memory");
+        }
+        if (qr_canvas.rows > PRINTER_MAX_ROWS) {
+            REFUSE(ESP_ERR_INVALID_ARG, "bad_size", "The ticket is too long to add a QR code");
+        }
+        job.image = qr_canvas.bits;
+        job.image_rows = (uint16_t)qr_canvas.rows;
+        if (alone) {
+            job.title = "QR code";              // for the log and /api/last-ticket: what the code says is kept out of both
+            job.text_in_image = lettered;       // no letters to draw with: the printer's own font prints the header and caption
+            job.body = lettered ? "" : qr.caption;
+        }
+    }
     if (!job.title[0] && !job.body[0] && !job.image) {
         REFUSE(ESP_ERR_INVALID_ARG, "empty", "Nothing to print");
     }
@@ -825,8 +864,21 @@ esp_err_t api_print_body(const uint8_t *buf, size_t len, printer_done_fn done, v
 out:
     cJSON_Delete(meta);
     free(layout);
+    ticket_canvas_free(&qr_canvas);
     return ret;
 #undef REFUSE
+}
+
+/* The reply to a print that joined the queue. */
+static esp_err_t print_ok(httpd_req_t *req, const printer_ticket_t *ticket)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "number", ticket->number);
+    cJSON_AddNumberToObject(root, "ticket_count", ticket->number);
+    cJSON_AddBoolToObject(root, "queued", ticket->position > 0);
+    cJSON_AddNumberToObject(root, "position", ticket->position);
+    return send_json(req, root);
 }
 
 static esp_err_t print_post(httpd_req_t *req)
@@ -859,14 +911,55 @@ static esp_err_t print_post(httpd_req_t *req)
     if (err != ESP_OK) {
         return print_fail(req, error, message);
     }
+    return print_ok(req, &ticket);
+}
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddNumberToObject(root, "number", ticket.number);
-    cJSON_AddNumberToObject(root, "ticket_count", ticket.number);
-    cJSON_AddBoolToObject(root, "queued", ticket.position > 0);
-    cJSON_AddNumberToObject(root, "position", ticket.position);
-    return send_json(req, root);
+/* ---------- POST /api/print/qr ----------
+ * Print a QR code. The body is the QR job as JSON (the format is in TikPrint Cloud's docs/device-api.md, "QR codes"):
+ *   {"data": "https://example.com", "size": "small"|"medium"|"full", "caption": "Our menu"}
+ * "size" (default "medium") and "caption" may be left out. The board makes the code itself.
+ * It is the same as POSTing a print body whose JSON is {"qr": <this job>} to /api/print, and that is
+ * how it is done here: one path for every ticket. Replies as /api/print does; a text too long for
+ * any QR code gets {"ok":false,"error":"qr_too_long",...}.
+ */
+#define MAX_QR_BODY (QR_DATA_MAX * 2 + 512)   // in JSON a character can take several bytes ("\u00e9")
+
+static esp_err_t print_qr_post(httpd_req_t *req)
+{
+    static const char open[] = "{\"qr\":";
+    size_t len = req->content_len, head = 4 + sizeof(open) - 1;
+    if (len < 2 || len > MAX_QR_BODY) {
+        return print_fail(req, len < 2 ? "bad_request" : "qr_too_long",
+                          len < 2 ? "The QR code could not be read" : "That's too long for a QR code");
+    }
+    uint8_t *buf = heap_caps_malloc(head + len + 1, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        return print_fail(req, "no_memory", "The printer is out of memory");
+    }
+    size_t got = 0;
+    while (got < len) {
+        int n = httpd_req_recv(req, (char *)buf + head + got, len - got);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (n <= 0) {
+            free(buf);
+            return ESP_FAIL;
+        }
+        got += n;
+    }
+    uint32_t meta_len = (uint32_t)(sizeof(open) - 1 + len + 1);
+    buf[0] = meta_len & 0xFF;
+    buf[1] = (meta_len >> 8) & 0xFF;
+    buf[2] = buf[3] = 0;
+    memcpy(buf + 4, open, sizeof(open) - 1);
+    buf[head + len] = '}';
+
+    printer_ticket_t ticket;
+    const char *error = "", *message = "";
+    esp_err_t err = api_print_body(buf, head + len + 1, NULL, NULL, &ticket, &error, &message);
+    free(buf);
+    return err == ESP_OK ? print_ok(req, &ticket) : print_fail(req, error, message);
 }
 
 /* ---------- GET /api/last-ticket ----------
@@ -1683,6 +1776,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = wifi_connect_post },
         { .uri = "/api/wifi/forget",  .method = HTTP_POST, .handler = wifi_forget_post },
         { .uri = "/api/print",        .method = HTTP_POST, .handler = print_post },
+        { .uri = "/api/print/qr",     .method = HTTP_POST, .handler = print_qr_post },
         { .uri = "/api/last-ticket",  .method = HTTP_GET,  .handler = last_ticket_get },
         { .uri = "/api/last-ticket.pbm", .method = HTTP_GET, .handler = last_ticket_pbm_get },
         { .uri = "/api/update/check", .method = HTTP_POST, .handler = update_check_post },
