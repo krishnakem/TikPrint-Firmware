@@ -31,6 +31,7 @@ typedef struct {
     char code[CLOUD_CODE_MAX];   // while pairing: the code on the ticket, for typing in by hand. Else ""
     int expires_in_s;            // while pairing: seconds the code is still good for
     char message[64];            // CLOUD_FAILED: what went wrong, for people. Else ""
+    bool task_running;           // the cloud task exists: the board is pairing, or linked and checking in
 } cloud_status_t;
 
 /** Call once at startup, after cloud_state_init(), cloud_identity_init() and printer_init().

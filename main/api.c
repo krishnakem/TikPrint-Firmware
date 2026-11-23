@@ -51,6 +51,7 @@
 #include "connectors.h"
 #include "cloud_state.h"
 #include "cloud.h"
+#include "cloud_http.h"
 #include "config.h"
 #include "zip_table.h"
 #include "city_table.h"
@@ -1605,8 +1606,17 @@ static esp_err_t connectors_print_now_post(httpd_req_t *req)
  * "state" is where linking stands (see cloud_phase_t in cloud.h): "local", "starting" (getting a code),
  * "pairing" (the ticket is out: "code" is the code on it), "linked", "expired" (nobody confirmed in
  * time) or "failed" ("message" says why).
+ * Every answer also says what the board has been doing, so it can be checked without a serial cable:
+ *   "calls_since_boot"  calls sent to TikPrint Cloud since the board started. A printer that is not
+ *                       linked, and where nobody pressed Upgrade, stays at 0 however long it runs
+ *   "last_call"         the newest one: "pair/start", "pair/status", "jobs", "jobs/body", "jobs/ack",
+ *                       "unlink"; null if there has been none
+ *   "last_error"        how the newest one failed: "timeout", "no_connection", "http_503", the cloud's own
+ *                       word such as "invalid_token", or "no_wifi" if it could not be sent; null if it went well
+ *   "polling"           whether the cloud task is running (false on a printer that is not linked)
+ *   "firmware"          the version that is running
  * It only reads what the board knows: nothing is asked of the cloud.
- * The device token is never sent back. */
+ * The device token and the device secret are never sent back. */
 static esp_err_t cloud_status_get(httpd_req_t *req)
 {
     char printer_id[CLOUD_PRINTER_ID_MAX];
@@ -1629,6 +1639,13 @@ static esp_err_t cloud_status_get(httpd_req_t *req)
         cJSON_AddStringToObject(root, "printer_id", printer_id);
     }
     cJSON_AddStringToObject(root, "cloud_url", cloud_state_get_cloud_url());
+    cloud_http_seen_t seen;
+    cloud_http_get_seen(&seen);
+    cJSON_AddNumberToObject(root, "calls_since_boot", seen.calls);
+    cJSON_AddItemToObject(root, "last_call", seen.last_call[0] ? cJSON_CreateString(seen.last_call) : cJSON_CreateNull());
+    cJSON_AddItemToObject(root, "last_error", seen.last_error[0] ? cJSON_CreateString(seen.last_error) : cJSON_CreateNull());
+    cJSON_AddBoolToObject(root, "polling", st.task_running);
+    cJSON_AddStringToObject(root, "firmware", esp_app_get_description()->version);
     return send_json(req, root);
 }
 

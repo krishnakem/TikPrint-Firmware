@@ -96,6 +96,7 @@ void cloud_get_status(cloud_status_t *out)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = s_status;
+    out->task_running = s_task_running;
     if (out->phase == CLOUD_PAIRING) {
         int64_t left = (s_pair_until_us - esp_timer_get_time()) / 1000000;
         out->expires_in_s = left > 0 ? (int)left : 0;
@@ -186,7 +187,7 @@ static bool code_is_plain(const char *code)
 static void pair_start(void)
 {
     cloud_reply_t reply;
-    cloud_http(&(cloud_request_t){ .post = true, .path = "/api/device/pair/start", .auth = CLOUD_AUTH_DEVICE,
+    cloud_http(&(cloud_request_t){ .name = "pair/start", .post = true, .path = "/api/device/pair/start", .auth = CLOUD_AUTH_DEVICE,
                                    .max_bytes = JSON_MAX }, &reply);
     cJSON *json = reply_json(&reply);
     const char *code = text_of(json, "code"), *link = text_of(json, "link_url");
@@ -225,7 +226,7 @@ static void pair_ask(void)
     char path[80];
     snprintf(path, sizeof(path), "/api/device/pair/status?code=%s", now.code);
     cloud_reply_t reply;
-    cloud_http(&(cloud_request_t){ .path = path, .auth = CLOUD_AUTH_DEVICE, .max_bytes = JSON_MAX }, &reply);
+    cloud_http(&(cloud_request_t){ .name = "pair/status", .path = path, .auth = CLOUD_AUTH_DEVICE, .max_bytes = JSON_MAX }, &reply);
     cJSON *json = reply_json(&reply);
     const char *status = text_of(json, "status"), *error = text_of(json, "error");
 
@@ -340,8 +341,8 @@ static bool send_reports(const char *token)
             snprintf(json, sizeof(json), "{\"status\":\"failed\",\"error\":\"%s\"}", cloud_job_end_message(end));
         }
         cloud_reply_t reply;
-        cloud_http(&(cloud_request_t){ .post = true, .path = path, .auth = CLOUD_AUTH_TOKEN, .token = token,
-                                       .json = json, .max_bytes = JSON_MAX }, &reply);
+        cloud_http(&(cloud_request_t){ .name = "jobs/ack", .post = true, .path = path, .auth = CLOUD_AUTH_TOKEN,
+                                       .token = token, .json = json, .max_bytes = JSON_MAX }, &reply);
         bool unlinked = says_unlinked(&reply);
         int status = reply.status;
         cloud_reply_free(&reply);
@@ -383,7 +384,7 @@ static bool start_job(const char *token, const char *id, int size)
     char path[96];
     snprintf(path, sizeof(path), "/api/device/jobs/%s/body", id);
     cloud_reply_t reply;
-    cloud_http(&(cloud_request_t){ .path = path, .auth = CLOUD_AUTH_TOKEN, .token = token,
+    cloud_http(&(cloud_request_t){ .name = "jobs/body", .path = path, .auth = CLOUD_AUTH_TOKEN, .token = token,
                                    .max_bytes = API_PRINT_BODY_MAX }, &reply);
     if (says_unlinked(&reply)) {
         cloud_reply_free(&reply);
@@ -438,8 +439,8 @@ static int check_in(void)
         return 0;
     }
     cloud_reply_t reply;
-    cloud_http(&(cloud_request_t){ .path = "/api/device/jobs", .auth = CLOUD_AUTH_TOKEN, .token = token,
-                                   .max_bytes = JSON_MAX }, &reply);
+    cloud_http(&(cloud_request_t){ .name = "jobs", .path = "/api/device/jobs", .auth = CLOUD_AUTH_TOKEN,
+                                   .token = token, .max_bytes = JSON_MAX }, &reply);
     if (says_unlinked(&reply)) {
         cloud_reply_free(&reply);
         go_local("the cloud refused the token");
@@ -505,8 +506,8 @@ static void tell_cloud_unlinked(void)
     s_stuck.id[0] = 0;
     if (token[0]) {
         cloud_reply_t reply;
-        cloud_http(&(cloud_request_t){ .post = true, .path = "/api/device/unlink", .auth = CLOUD_AUTH_TOKEN,
-                                       .token = token, .max_bytes = JSON_MAX }, &reply);
+        cloud_http(&(cloud_request_t){ .name = "unlink", .post = true, .path = "/api/device/unlink",
+                                       .auth = CLOUD_AUTH_TOKEN, .token = token, .max_bytes = JSON_MAX }, &reply);
         ESP_LOGI(TAG, "unlinked: %s", reply.status == 200 || reply.status == 401 ? "the cloud knows"
                  : "the cloud was not reached, the website will still list the printer");
         cloud_reply_free(&reply);
