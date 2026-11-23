@@ -46,3 +46,28 @@ esp_err_t fw_github_set_beta(bool on);
 /** Download and install the latest release, then restart. Returns at once.
  *  ESP_ERR_INVALID_STATE if busy, ESP_ERR_NOT_FOUND if no newer release is known. */
 esp_err_t fw_github_install(void);
+
+/**
+ * Download and install one named release, then restart: what "Update" on the TikPrint Cloud website
+ * asks for (see cloud_update.c). Returns at once.
+ *
+ * Only a version number is taken, e.g. "0.4.2" or "0.4.2-beta.7". NEVER AN ADDRESS: the address is
+ * built here, from FW_GITHUB_REPO and FW_GITHUB_ASSET, so the file can only come from that repository.
+ *   ESP_ERR_INVALID_ARG      not a version number
+ *   ESP_ERR_INVALID_VERSION  not newer than what is running (the board never goes back)
+ *   ESP_ERR_INVALID_STATE    busy with a check or another install: ask again in a moment
+ */
+esp_err_t fw_github_install_version(const char *version);
+
+/* How an install is going, for whoever asked for it to be told. */
+typedef enum {
+    FW_GITHUB_STEP_INSTALLING,   // the whole file has arrived: it is being checked and made the next to start
+    FW_GITHUB_STEP_RESTARTING,   // checked and in place: the board restarts in a moment
+    FW_GITHUB_STEP_FAILED,       // given up, nothing was changed: `error` says why
+} fw_github_step_t;
+
+typedef void (*fw_github_listener_t)(fw_github_step_t step, const char *error);
+
+/** Have `listener` called at each step of every install (on the updater's task; it may take a
+ *  few seconds over it, the install waits). One listener; call before fw_github_start(). */
+void fw_github_set_listener(fw_github_listener_t listener);

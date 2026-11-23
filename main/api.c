@@ -52,6 +52,7 @@
 #include "cloud_state.h"
 #include "cloud.h"
 #include "cloud_http.h"
+#include "cloud_realtime.h"
 #include "paper_code.h"
 #include "config.h"
 #include "zip_table.h"
@@ -1470,10 +1471,16 @@ static esp_err_t refuse_too_soon(httpd_req_t *req, int wait_s)
  *   "calls_since_boot"  calls sent to TikPrint Cloud since the board started. A printer that is not
  *                       linked, and where nobody pressed the TikPrint Cloud button, stays at 0 however long it runs
  *   "last_call"         the newest one: "pair/start", "pair/status", "jobs", "jobs/body", "jobs/ack",
- *                       "unlink"; null if there has been none
+ *                       "realtime", "unlink"; null if there has been none
  *   "last_error"        how the newest one failed: "timeout", "no_connection", "http_503", the cloud's own
  *                       word such as "invalid_token", or "no_wifi" if it could not be sent; null if it went well
  *   "polling"           whether the cloud task is running (false on a printer that is not linked)
+ *   "realtime"          the socket on which a linked printer hears of prints at once (cloud_realtime.h):
+ *                       {"listening":true,"state":"listening","last_event":"print","last_event_s_ago":12,
+ *                        "commands":3,"reconnects":0}. "state" is "stopped" (not linked), "waiting" (to try
+ *                       again), "asking", "connecting", "joining", "listening" or "off" (the site has no
+ *                       Realtime). "commands" = heard on the socket since the board started, "reconnects" =
+ *                       times a listening socket was lost. No token, key or address is in it
  *   "firmware"          the version that is running
  * It only reads what the board knows: nothing is asked of the cloud.
  * The device token, the device secret and the unlink code are never sent back either. */
@@ -1504,6 +1511,15 @@ static esp_err_t cloud_status_get(httpd_req_t *req)
     cJSON_AddItemToObject(root, "last_call", seen.last_call[0] ? cJSON_CreateString(seen.last_call) : cJSON_CreateNull());
     cJSON_AddItemToObject(root, "last_error", seen.last_error[0] ? cJSON_CreateString(seen.last_error) : cJSON_CreateNull());
     cJSON_AddBoolToObject(root, "polling", st.task_running);
+    cloud_realtime_status_t rt;
+    cloud_realtime_get_status(&rt);
+    cJSON *realtime = cJSON_AddObjectToObject(root, "realtime");
+    cJSON_AddBoolToObject(realtime, "listening", rt.listening);
+    cJSON_AddStringToObject(realtime, "state", rt.state);
+    cJSON_AddItemToObject(realtime, "last_event", rt.last_event[0] ? cJSON_CreateString(rt.last_event) : cJSON_CreateNull());
+    cJSON_AddNumberToObject(realtime, "last_event_s_ago", rt.last_event_s_ago);
+    cJSON_AddNumberToObject(realtime, "commands", rt.commands);
+    cJSON_AddNumberToObject(realtime, "reconnects", rt.reconnects);
     cJSON_AddStringToObject(root, "firmware", esp_app_get_description()->version);
     return send_json(req, root);
 }

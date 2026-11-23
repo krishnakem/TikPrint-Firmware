@@ -13,10 +13,17 @@
  * ticket and nowhere else, and unlinking from the page waits for the code on a ticket of its own.
  *
  * Printing from anywhere, once linked:
- *   every 10 s   GET jobs          "anything for me?" (this is also what shows the printer as online)
+ *   now and then GET jobs          "anything for me?" The cloud says how long to wait before the next
  *   for a job    GET its body      the same bytes the page POSTs to /api/print
  *                api_print_body    into the print queue, the very path a local print takes
  *   when the ticket is out         POST ack "printed" (or "failed" if the printer gave up)
+ *
+ * A linked printer also LISTENS (cloud_realtime.c): it keeps a socket open to the cloud and hears
+ * of a new print the moment it is made. What it hears is only "there is a job with this id": the
+ * job is then downloaded, printed and reported right here, by the same code as a job found at a
+ * check-in (cloud_print_command -> offer_job -> start_job). While the socket is up, the check-ins
+ * say so ("X-Realtime: 1") and the cloud spaces them 15 minutes apart: they are only the backup.
+ * When the socket is down they go back to being the way prints arrive, as often as before.
  * One cloud job is in the print queue at a time, oldest first, so cloud jobs never crowd out
  * local prints. A job that is only waiting (for its turn, for paper, for the cover) is not
  * reported: the report goes out when it has really printed.
@@ -28,6 +35,7 @@
 
 #include "cJSON.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_random.h"
@@ -40,8 +48,10 @@
 #include "cloud.h"
 #include "cloud_http.h"
 #include "cloud_jobs.h"
+#include "cloud_realtime.h"
 #include "cloud_state.h"
 #include "cloud_ticket.h"
+#include "cloud_update.h"
 #include "paper_code.h"
 
 static const char *TAG = "cloud";
@@ -49,13 +59,16 @@ static const char *TAG = "cloud";
 #define TASK_STACK       12288   // HTTPS needs a deep stack
 #define TASK_PRIORITY    3       // below the web server, the print queue and the automations: it never holds them up
 #define JSON_MAX         8192    // the biggest JSON answer accepted
+#define JOBS_JSON_MAX    16384   // ... and for a check-in, which lists up to 5 jobs and 10 commands
+#define HEARD_MAX        8       // prints heard on the socket that wait their turn; more than this are found at a check-in
 #define PAIR_EVERY_S     3       // "am I linked yet?" this often, unless the cloud says otherwise
 #define PAIR_LIFETIME_S  600     // how long a pairing code is good for, unless the cloud says otherwise
 #define PAIR_GRACE_S     20      // keep asking this long after the code should have run out: the cloud has the last word
 #define POLL_EVERY_S     10      // check in for jobs this often when the cloud's answer does not say how often
 #define POLL_FASTEST_S   5       // what the cloud asks for ("next_poll_seconds") is kept within these two
-#define POLL_SLOWEST_S   600     // ... and when the cloud cannot be reached, the wait doubles each time, up to this
+#define POLL_SLOWEST_S   900     // ... and when the cloud cannot be reached, the wait doubles each time, up to this
 #define POLL_RETRY_MIN_S 10      // after a check-in that failed, never try again sooner than this
+#define REPORT_RETRY_S   30      // a report on a job that did not get through goes again after this (or at the next check-in, if sooner)
 #define DOWNLOAD_TRIES   5       // a print body that will not download is given up on after this many check-ins
 
 #define MSG_UNREACHABLE "Can't reach TikPrint Cloud. Check the Wi-Fi."
@@ -80,10 +93,21 @@ static int64_t s_unlink_asked_us;     // when an unlink ticket was last asked fo
 static bool s_done_ready;             // there is news
 static uint32_t s_done_ticket;        // which ticket it is about (s_in_queue.ticket)
 static esp_err_t s_done_result;       // ESP_OK = printed
+/* The Realtime task tells the cloud task: */
+static bool s_poll_now;               // check in now, not when the wait is over
+static struct {
+    char id[CLOUD_JOB_ID_MAX];
+    int size;
+} s_heard[HEARD_MAX];                 // prints heard on the socket, oldest first, not yet in the print queue
+static int s_heard_count;
 
 /* The rest is only touched by the cloud task. */
 static int s_poll_every_s = POLL_EVERY_S;   // what the last good answer said: the cloud picks it, and may change it every time
 static int s_poll_failures;           // check-ins in a row that got no answer
+static bool s_poll_was_listening;     // s_poll_every_s came from a check-in that said "X-Realtime: 1" (so it is 15 minutes)
+static int64_t s_next_poll_us;        // when the next check-in is due (board uptime). 0 = now
+static bool s_poll_after_print;       // the last check-in handed out prints: check in again once one has printed
+static bool s_retry_soon;             // a job could not be taken just now (queue full, download failed): look again soon
 static struct {
     bool active;                      // a cloud job is in the print queue (waiting or printing)
     char id[CLOUD_JOB_ID_MAX];
@@ -254,6 +278,7 @@ static void pair_ask(void)
         // token and cancel this one: the newest always wins, and it is the only one ever saved.
         if (cloud_state_save_link(text_of(json, "device_token"), text_of(json, "printer_id")) == ESP_OK) {
             ESP_LOGI(TAG, "linked as \"%s\": device token saved", text_of(json, "name"));   // the token is never logged
+            s_next_poll_us = 0;   // check in straight away
             set_phase(CLOUD_LINKED, NULL, NULL);
         } else {
             ESP_LOGW(TAG, "linked, but the token could not be saved: asking for another");
@@ -281,6 +306,23 @@ static void pair_ask(void)
 
 /* ---------- Printing from anywhere ---------- */
 
+/* The printer is not linked any more: stop listening, and forget the jobs and commands of the
+ * account it belonged to. */
+static void forget_cloud_work(void)
+{
+    cloud_realtime_stop();       // closes the socket and wipes its session before anything else
+    cloud_jobs_clear();
+    cloud_update_clear();
+    s_in_queue.active = false;   // if that ticket is still in the queue it prints; nobody is told
+    s_stuck.id[0] = 0;
+    s_next_poll_us = 0;
+    s_poll_after_print = s_retry_soon = s_poll_was_listening = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_heard_count = 0;
+    s_poll_now = false;
+    xSemaphoreGive(s_lock);
+}
+
 /* The cloud says this token is not valid any more: the owner unlinked the printer on the website,
  * or linked it again elsewhere. Delete the token and go back to local only: from here the board
  * calls nobody until the TikPrint Cloud button is pressed again. */
@@ -288,9 +330,7 @@ static void go_local(const char *why)
 {
     ESP_LOGW(TAG, "%s: token deleted, back to local only", why);
     cloud_state_clear();
-    cloud_jobs_clear();
-    s_in_queue.active = false;   // if that ticket is still in the queue it prints; nobody is told
-    s_stuck.id[0] = 0;
+    forget_cloud_work();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     paper_code_clear(&s_unlink_code);   // an unlink ticket that is out has nothing left to unlink
     xSemaphoreGive(s_lock);
@@ -333,8 +373,8 @@ static void on_print_done(void *ctx, esp_err_t result)
     xSemaphoreGive(s_wake);   // report back now, not at the next check-in
 }
 
-/* Has the cloud job in the print queue ended? Then note how, to be reported. */
-static void collect_print_done(void)
+/* Has the cloud job in the print queue ended? Then note how, to be reported. True if one has. */
+static bool collect_print_done(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool ready = s_done_ready;
@@ -346,7 +386,9 @@ static void collect_print_done(void)
         ESP_LOGI(TAG, "cloud job %.8s %s", s_in_queue.id, result == ESP_OK ? "printed" : "failed to print");
         cloud_jobs_finished(s_in_queue.id, result == ESP_OK ? CLOUD_JOB_PRINTED : CLOUD_JOB_NOT_PRINTED);
         s_in_queue.active = false;
+        return true;
     }
+    return false;
 }
 
 /* Report every finished job the cloud has not heard about. A report that does not get through
@@ -393,6 +435,8 @@ static void download_failed(const char *id)
         ESP_LOGW(TAG, "cloud job %.8s: giving up on the download", id);
         cloud_jobs_finished(id, CLOUD_JOB_NO_DOWNLOAD);
         s_stuck.id[0] = 0;
+    } else {
+        s_retry_soon = true;
     }
 }
 
@@ -442,27 +486,52 @@ static bool start_job(const char *token, const char *id, int size)
         } else {
             // The queue is full or memory is short: the job stays on the cloud, and the next check-in tries again.
             ESP_LOGW(TAG, "cloud job %.8s has to wait: %s", id, message);
+            s_retry_soon = true;
         }
     }
     cloud_reply_free(&reply);
     return true;
 }
 
-/* One check-in. Returns how many seconds to wait before the next. */
-static int check_in(void)
+/*
+ * The cloud has a job for this printer: it was listed at a check-in, or heard on the socket. Both
+ * end up here, so a job prints once however many times and ways it is offered.
+ * *report: set if there is something to report at once. *waiting: set if the job has to wait its
+ * turn. False if the printer turned out to be unlinked.
+ */
+static bool offer_job(const char *token, const char *id, int size, bool *report, bool *waiting)
 {
-    char token[CLOUD_TOKEN_MAX];
-    if (!cloud_state_get_token(token, sizeof(token))) {
-        set_phase(CLOUD_LOCAL, NULL, NULL);   // the token is gone: nothing to check in with
-        return 0;
+    cloud_job_end_t end;
+    if (!job_id_is_plain(id)) {
+        return true;
     }
-    collect_print_done();
-    if (!send_reports(token)) {
-        return 0;
+    if (cloud_jobs_find(id, &end)) {
+        // Finished already, yet offered again: the report was lost. Report again; do not print again.
+        ESP_LOGI(TAG, "cloud job %.8s is offered again: reporting it again, not printing it again", id);
+        cloud_jobs_report_again(id);
+        *report = true;
+    } else if (s_in_queue.active) {
+        // A cloud job is in the print queue. This one waits its turn on the cloud (unless it is that very job).
+        *waiting = *waiting || strcmp(id, s_in_queue.id) != 0;
+    } else {
+        if (!start_job(token, id, size < 0 ? 0 : size > API_PRINT_BODY_MAX ? API_PRINT_BODY_MAX + 1 : size)) {
+            return false;
+        }
+        *report = *report || cloud_jobs_find(id, &end);   // it could not print: say so now
+        *waiting = true;                                  // (or it is printing: there may be more after it)
     }
+    return true;
+}
+
+/* One check-in. Returns how many seconds to wait before the next; 0 if the printer turned out to be unlinked. */
+static int check_in(const char *token)
+{
+    // While the socket is up, say so: the cloud then answers "come back in 15 minutes", and lists
+    // every command that is still open, in case one was missed on the socket.
+    bool listening = cloud_realtime_is_listening();
     cloud_reply_t reply;
     cloud_http(&(cloud_request_t){ .name = "jobs", .path = "/api/device/jobs", .auth = CLOUD_AUTH_TOKEN,
-                                   .token = token, .max_bytes = JSON_MAX }, &reply);
+                                   .token = token, .listening = listening, .max_bytes = JOBS_JSON_MAX }, &reply);
     if (says_unlinked(&reply)) {
         cloud_reply_free(&reply);
         go_local("the cloud refused the token");
@@ -474,8 +543,11 @@ static int check_in(void)
         // No network, a timeout, a 5xx, a 429, an answer that is not JSON: nothing is wrong with the
         // link. Keep the token and try again, a little later each time. The first wait is what the
         // last good answer said (never sooner than that, and never sooner than POLL_RETRY_MIN_S).
+        // The 15 minutes of a listening printer do not count once the socket is down: then the
+        // check-ins are how prints arrive again, and the waits start from POLL_RETRY_MIN_S.
+        int every_s = s_poll_was_listening && !listening ? POLL_RETRY_MIN_S : s_poll_every_s;
         s_poll_failures = s_poll_failures < 8 ? s_poll_failures + 1 : 8;
-        int wait = (s_poll_every_s > POLL_RETRY_MIN_S ? s_poll_every_s : POLL_RETRY_MIN_S) << (s_poll_failures - 1);
+        int wait = (every_s > POLL_RETRY_MIN_S ? every_s : POLL_RETRY_MIN_S) << (s_poll_failures - 1);
         return wait > POLL_SLOWEST_S ? POLL_SLOWEST_S : wait;
     }
     s_poll_failures = 0;
@@ -484,34 +556,224 @@ static int check_in(void)
     s_poll_every_s = number_of(json, "next_poll_seconds",
                                number_of(json, "poll_interval_s", POLL_EVERY_S, POLL_FASTEST_S, POLL_SLOWEST_S),
                                POLL_FASTEST_S, POLL_SLOWEST_S);
+    s_poll_was_listening = listening;
 
-    bool linked = true, more_to_report = false;
-    const cJSON *job;
-    cJSON_ArrayForEach(job, cJSON_GetObjectItem(json, "jobs")) {   // oldest first
-        const char *id = text_of(job, "id");
-        cloud_job_end_t end;
-        if (!job_id_is_plain(id)) {
-            continue;
-        }
-        if (cloud_jobs_find(id, &end)) {
-            // Finished already, yet offered again: the report was lost. Report again; do not print again.
-            ESP_LOGI(TAG, "cloud job %.8s is offered again: reporting it again, not printing it again", id);
-            cloud_jobs_report_again(id);
-            more_to_report = true;
-        } else if (!s_in_queue.active) {
-            linked = start_job(token, id, number_of(job, "size", 0, 0, API_PRINT_BODY_MAX + 1));
+    bool linked = true, report = false, waiting = false;
+    const cJSON *commands = cJSON_GetObjectItem(json, "commands"), *item;
+    if (cJSON_IsArray(commands)) {
+        // Everything that is still open, oldest first: the same rows the socket delivers. The prints
+        // among them are the same as in "jobs", so "jobs" is not read as well.
+        cJSON_ArrayForEach(item, commands) {
+            const char *type = text_of(item, "type");
+            const cJSON *payload = cJSON_GetObjectItem(item, "payload");
+            if (strcmp(type, "print") == 0) {
+                const char *id = text_of(payload, "id");
+                linked = offer_job(token, id[0] ? id : text_of(item, "id"), number_of(payload, "size", 0, 0, API_PRINT_BODY_MAX + 1),
+                                   &report, &waiting);
+            } else if (strcmp(type, "update") == 0) {
+                cloud_update_command(text_of(item, "id"), text_of(payload, "version"));   // a version, never an address
+            }
             if (!linked) {
                 break;
             }
-            more_to_report = more_to_report || cloud_jobs_find(id, &end);   // it could not print: say so now
         }
-        // else: a cloud job is in the print queue. This one waits its turn on the cloud.
+    } else {
+        // A site from before commands: only "jobs".
+        cJSON_ArrayForEach(item, cJSON_GetObjectItem(json, "jobs")) {   // oldest first
+            linked = offer_job(token, text_of(item, "id"), number_of(item, "size", 0, 0, API_PRINT_BODY_MAX + 1), &report, &waiting);
+            if (!linked) {
+                break;
+            }
+        }
     }
     cJSON_Delete(json);
-    if (linked && more_to_report) {
+    if (linked && report) {
         linked = send_reports(token);
     }
+    s_poll_after_print = waiting;   // more may be waiting on the cloud: check in again when the ticket is out
     return linked ? s_poll_every_s : 0;
+}
+
+/* ---------- Listening (see cloud_realtime.h) ---------- */
+
+void cloud_wake(void)
+{
+    xSemaphoreGive(s_wake);
+}
+
+void cloud_poll_now(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_poll_now = true;
+    xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_wake);
+}
+
+void cloud_print_command(const char *id, int size)
+{
+    if (!id || !job_id_is_plain(id)) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool known = false;
+    for (int i = 0; i < s_heard_count; i++) {
+        known = known || strcmp(s_heard[i].id, id) == 0;
+    }
+    if (known) {
+        // heard twice: once is enough
+    } else if (s_heard_count < HEARD_MAX) {
+        strlcpy(s_heard[s_heard_count].id, id, sizeof(s_heard[0].id));
+        s_heard[s_heard_count].size = size;
+        s_heard_count++;
+    } else {
+        s_poll_now = true;   // no room to remember it: the check-in lists it
+    }
+    xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_wake);
+}
+
+/* The oldest print heard on the socket that is not in the print queue yet. False if there is none. */
+static bool take_heard(char id[CLOUD_JOB_ID_MAX], int *size)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool have = s_heard_count > 0;
+    if (have) {
+        strlcpy(id, s_heard[0].id, CLOUD_JOB_ID_MAX);
+        *size = s_heard[0].size;
+        s_heard_count--;
+        memmove(&s_heard[0], &s_heard[1], (size_t)s_heard_count * sizeof(s_heard[0]));
+    }
+    xSemaphoreGive(s_lock);
+    return have;
+}
+
+/* A text field of the cloud's answer into a fixed place. False if it is missing or does not fit. */
+static bool take_text(const cJSON *json, const char *name, char *out, size_t size)
+{
+    const char *text = text_of(json, name);
+    return text[0] && strlcpy(out, text, size) < size;
+}
+
+/* The Realtime task needs a session: the address of the socket and a short-lived token for it.
+ * Only this task holds the device token, so it asks, and hands the answer over. Nothing of it is
+ * saved to flash or logged. False if the printer turned out to be unlinked. */
+static bool fetch_session(const char *token)
+{
+    cloud_reply_t reply;
+    cloud_http(&(cloud_request_t){ .name = "realtime", .post = true, .path = "/api/device/realtime", .auth = CLOUD_AUTH_TOKEN,
+                                   .token = token, .max_bytes = JSON_MAX }, &reply);
+    if (says_unlinked(&reply)) {
+        cloud_reply_free(&reply);
+        go_local("the cloud refused the token");
+        return false;
+    }
+    cJSON *json = reply_json(&reply);
+    cloud_realtime_result_t result = CLOUD_REALTIME_SESSION_FAILED;
+    cloud_realtime_session_t *session = NULL;
+    if (reply.status == 200 && json && (session = heap_caps_calloc(1, sizeof(*session), MALLOC_CAP_SPIRAM)) != NULL) {
+        char mine[CLOUD_PRINTER_ID_MAX];
+        cloud_state_get_printer_id(mine, sizeof(mine));
+        session->expires_in_s = number_of(json, "expires_in_s", 3600, 60, 24 * 3600);
+        session->heartbeat_s = number_of(json, "heartbeat_s", 60, 15, 900);
+        bool whole = take_text(json, "supabase_url", session->supabase_url, sizeof(session->supabase_url)) &&
+                     take_text(json, "realtime_url", session->realtime_url, sizeof(session->realtime_url)) &&
+                     take_text(json, "apikey", session->apikey, sizeof(session->apikey)) &&
+                     take_text(json, "access_token", session->access_token, sizeof(session->access_token)) &&
+                     take_text(json, "printer_id", session->printer_id, sizeof(session->printer_id)) &&
+                     take_text(json, "topic", session->topic, sizeof(session->topic)) &&
+                     take_text(json, "table", session->table, sizeof(session->table)) &&
+                     take_text(json, "filter", session->filter, sizeof(session->filter));
+        // The session must be for this printer (if the board knows its printer id).
+        if (whole && (!mine[0] || strcmp(mine, session->printer_id) == 0)) {
+            result = CLOUD_REALTIME_SESSION_OK;
+        } else {
+            ESP_LOGW(TAG, "realtime: the answer is not a whole session for this printer");
+        }
+    } else if (reply.status == 503 && strcmp(text_of(json, "error"), "realtime_off") == 0) {
+        result = CLOUD_REALTIME_SESSION_OFF;
+    }
+    cloud_realtime_session(result, session);
+    // The answer had a token in it: wipe every copy before the memory is given back.
+    if (session) {
+        memset(session, 0, sizeof(*session));
+        free(session);
+    }
+    cJSON_Delete(json);
+    if (reply.body) {
+        memset(reply.body, 0, reply.len);
+    }
+    cloud_reply_free(&reply);
+    return true;
+}
+
+/* What a linked printer does, over and over: report what has printed, fetch a session if the
+ * Realtime task needs one, start the prints heard on the socket, check in when it is time, then
+ * sleep until the next check-in is due or something wakes the task. */
+static void linked_step(void)
+{
+    char token[CLOUD_TOKEN_MAX];
+    if (!cloud_state_get_token(token, sizeof(token))) {
+        set_phase(CLOUD_LOCAL, NULL, NULL);   // the token is gone: nothing to check in with
+        return;
+    }
+    bool printed = collect_print_done();
+    if (!send_reports(token)) {
+        return;
+    }
+    if (cloud_realtime_wants_session() && !fetch_session(token)) {
+        return;
+    }
+
+    // Prints heard on the socket: one at a time into the print queue, oldest first.
+    char id[CLOUD_JOB_ID_MAX];
+    int size;
+    bool report = false, waiting = false;
+    while (!s_in_queue.active && take_heard(id, &size)) {
+        if (!offer_job(token, id, size, &report, &waiting)) {
+            return;
+        }
+    }
+    if (report && !send_reports(token)) {
+        return;
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool poll_now = s_poll_now;
+    s_poll_now = false;
+    xSemaphoreGive(s_lock);
+    int64_t now_us = esp_timer_get_time();
+    if (printed && s_poll_after_print) {
+        poll_now = true;   // the last check-in had prints in it: see if more are waiting
+    }
+    if (s_retry_soon) {
+        // A job could not be taken just now. With the socket up the next check-in is 15 minutes
+        // away, which is too long to leave it: look again shortly. (Without the socket, the
+        // check-ins come often enough as they are.)
+        s_retry_soon = false;
+        int64_t soon_us = now_us + (int64_t)POLL_RETRY_MIN_S * 1000000;
+        if (cloud_realtime_is_listening() && s_next_poll_us > soon_us) {
+            s_next_poll_us = soon_us;
+        }
+    }
+    if (poll_now || now_us >= s_next_poll_us) {
+        int wait = check_in(token);
+        if (wait <= 0) {
+            return;   // not linked any more
+        }
+        now_us = esp_timer_get_time();
+        s_next_poll_us = now_us + (int64_t)wait * 1000000;
+        if (s_retry_soon) {
+            return;   // go round once more, to bring the next check-in forward
+        }
+    }
+    // Sleep until the next check-in, or until the ticket has printed, something is heard on the
+    // socket, Wi-Fi comes back, or a button on the page is pressed.
+    int64_t left_ms = (s_next_poll_us - now_us) / 1000;
+    cloud_job_end_t end;
+    if (cloud_jobs_next_unreported(id, &end) && left_ms > REPORT_RETRY_S * 1000) {
+        left_ms = REPORT_RETRY_S * 1000;   // a report did not get through: do not leave it until a check-in that may be 15 minutes away
+    }
+    xSemaphoreTake(s_wake, pdMS_TO_TICKS(left_ms < 1 ? 1 : left_ms));
 }
 
 /* ---------- Unlinking ---------- */
@@ -529,9 +791,7 @@ static void tell_cloud_unlinked(void)
     strlcpy(token, s_unlink_token, sizeof(token));
     memset(s_unlink_token, 0, sizeof(s_unlink_token));
     xSemaphoreGive(s_lock);
-    cloud_jobs_clear();
-    s_in_queue.active = false;
-    s_stuck.id[0] = 0;
+    forget_cloud_work();
     if (token[0]) {
         cloud_reply_t reply;
         cloud_http(&(cloud_request_t){ .name = "unlink", .post = true, .path = "/api/device/unlink",
@@ -653,13 +913,12 @@ static void cloud_task(void *arg)
                 pair_ask();
             }
         } else if (phase == CLOUD_LINKED) {
-            int wait = check_in();
-            if (wait > 0) {
-                wait_s(wait);   // or until the ticket has printed, Wi-Fi comes back, or a button on the page is pressed
-            }
+            cloud_realtime_start();   // listen for as long as the printer is linked (does nothing if already listening)
+            linked_step();
         } else {
             // Nothing left to do: close the connection and end the task. From here the board calls
             // nobody, until the TikPrint Cloud button is pressed again.
+            cloud_realtime_stop();   // (stopped already when the token was deleted: this is the belt to those braces)
             cloud_http_close();
             xSemaphoreTake(s_lock, portMAX_DELAY);
             if (!s_want_pair && !s_want_unlink) {
@@ -716,7 +975,7 @@ esp_err_t cloud_pair(int *wait_s)
  * wakes the cloud task. On a printer that is not linked there is no task, so still nobody is called. */
 static void on_wifi_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    xSemaphoreGive(s_wake);
+    cloud_poll_now();
 }
 
 esp_err_t cloud_init(void)
@@ -728,6 +987,11 @@ esp_err_t cloud_init(void)
     }
     s_pair_every_s = PAIR_EVERY_S;
     cloud_jobs_init();
+    cloud_update_init();
+    esp_err_t rt = cloud_realtime_init();
+    if (rt != ESP_OK) {
+        return rt;
+    }
     esp_err_t heard = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_got_ip, NULL);
     if (heard != ESP_OK) {
         return heard;
