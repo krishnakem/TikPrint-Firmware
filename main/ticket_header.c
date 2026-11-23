@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "clock.h"
+#include "printer.h"
 #include "settings.h"
 #include "ticket_header.h"
 #include "weather.h"
@@ -43,4 +44,26 @@ void ticket_header_text(char *left, char *right, bool with_location)
         snprintf(right, TICKET_HEADER_MAX, "%s%s%s", has_date ? date : time, has_date && has_time ? " | " : "",
                  has_date && has_time ? time : "");
     }
+}
+
+#define HEADER_SIZE  20   // the sizes the board has letters for: see tools/make_ticket_fonts.py
+#define HEADER_SMALL 17
+
+int ticket_header_draw(ticket_canvas_t *canvas, int font, int y)
+{
+    const ticket_face_t *face = ticket_face(font, true, HEADER_SIZE), *small = ticket_face(font, true, HEADER_SMALL);
+    if (!face || !small) {
+        return 0;
+    }
+    char left[TICKET_HEADER_MAX], right[TICKET_HEADER_MAX];
+    ticket_header_text(left, right, true);
+    for (char *p = right; *p; p++) {
+        *p = (*p >= 'a' && *p <= 'z') ? (char)(*p - 'a' + 'A') : *p;
+    }
+    if (ticket_text_width(face, left, strlen(left)) + ticket_text_width(face, right, strlen(right)) + HEADER_SIZE > PRINTER_WIDTH_DOTS) {
+        face = small;
+    }
+    ticket_draw_text(canvas, face, 0, y, left, strlen(left));
+    ticket_draw_right(canvas, face, PRINTER_WIDTH_DOTS, y, right, strlen(right));
+    return y + ticket_face_line(face) + 8;
 }
