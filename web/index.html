@@ -237,6 +237,10 @@ button.kv:hover{background:var(--hover)}
 .sheet .link{display:block;margin:10px auto 0;color:var(--muted);font-size:13px}
 .sheet .link:hover{color:var(--ink)}
 .sheet .btn{display:block;width:calc(100% - 20px);height:36px;margin:16px auto 0;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600}
+/* Linking to TikPrint Cloud: the same sheet in a popover of its own, with the pairing code in it */
+#cloudPop .sheet{display:block}
+.sheet code{display:inline-block;margin:10px 0 4px;font:600 19px var(--mono);letter-spacing:.06em;padding:7px 12px;border:1px dashed var(--line);border-radius:8px}
+.sheet code:empty,.sheet .btn[hidden]{display:none}
 /* Upload progress */
 .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px 10px 8px}
 .bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
@@ -483,6 +487,17 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
 </div>
 
+<!-- TikPrint Cloud popover: linking this printer to an account, after "Upgrade to Pro" -->
+<div class="pop" id="cloudPop">
+  <div class="sheet" aria-live="polite">
+    <div class="c" id="clIco"></div>
+    <b id="clTitle"></b>
+    <code id="clCode"></code>
+    <p id="clText"></p>
+    <button class="btn" id="clGo" hidden></button>
+  </div>
+</div>
+
 <main>
   <!-- Formatting toolbar: works on the selected text, like a word processor -->
   <div class="tools" id="tools">
@@ -570,29 +585,68 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
 
 const $=id=>document.getElementById(id);
 /* TikPrint Cloud: where Pro lives. "Pro" means this printer is linked to TikPrint Cloud.
-   This page never talks to the cloud itself: the board says whether it is linked and where the cloud is
-   (/api/cloud/status), and every Pro button on the page follows that, through showCloud and openCloud:
-     not linked -> "Upgrade to Pro" (short: "Pro"), opens the cloud
+   This page never talks to the cloud itself: the board says whether it is linked, where linking stands and
+   where the cloud is (/api/cloud/status), and every Pro button on the page follows that, through showCloud
+   and openCloud:
+     not linked -> "Upgrade to Pro" (short: "Pro"): the board gets a pairing code from the cloud and prints
+                   a ticket with a QR code. Scanning it and signing in links the printer. Meanwhile the
+                   cloud popover says where things stand (showCloudPop).
      linked     -> "Open TikPrint Cloud" (short: "Cloud"), opens the cloud at this printer
    If the board can't be asked, the buttons go back to "Upgrade to Pro". */
-let cloud={linked:false,printer_id:'',cloud_url:''};
+let cloud={linked:false,state:'local',code:'',message:'',printer_id:'',cloud_url:''};
 const cloudLabel=()=>cloud.linked?'Open TikPrint Cloud':'Upgrade to Pro';
 function showCloud(){
+  showCloudPop();
   const label=cloudLabel(), pro=$('proBtn');
   if(pro.title===label)return;   // nothing changed since the last look
   pro.title=label; pro.querySelector('.t').textContent=label; pro.querySelector('.s').textContent=cloud.linked?'Cloud':'Pro';
   document.querySelectorAll('.cloudbtn').forEach(b=>b.textContent=label);
 }
-function openCloud(){
+function openCloudSite(){
   if(!cloud.cloud_url){toast('Can’t reach the printer'); return}
   const url=cloud.cloud_url.replace(/\/+$/,'');
   window.open(cloud.linked&&cloud.printer_id?url+'/?printer='+encodeURIComponent(cloud.printer_id):url,'_blank','noopener');
+}
+/* Every Pro button comes here. */
+function openCloud(){
+  if(cloud.linked){openCloudSite(); return}
+  // After this click has run its course: a click anywhere outside a popover closes them all.
+  setTimeout(()=>{
+    closeAll('cloudPop'); $('cloudPop').classList.add('open');
+    if(cloud.state==='starting'||cloud.state==='pairing')showCloudPop();   // a ticket is out already: show its code again
+    else startLinking();
+  },0);
+}
+/* Ask the board to get a pairing code and print the ticket. Only this makes a printer call the cloud. */
+let linkAskedAt=0;
+async function startLinking(){
+  linkAskedAt=Date.now(); cloud.state='starting'; showCloudPop();
+  let r=null; try{r=await api('/api/cloud/pair',{},5000)}catch(e){}
+  if(!r||!r.ok){cloud.state='failed'; cloud.message=r&&r.error==='already_linked'?'':(r&&r.message)||'Can’t reach the printer'; showCloudPop()}
+  await refreshCloud();
+}
+/* The cloud popover, while it is open: where linking stands. */
+function showCloudPop(){
+  if(!$('cloudPop').classList.contains('open'))return;
+  const site=cloud.cloud_url.replace(/^https?:\/\//,'').replace(/\/+$/,'');
+  const o=cloud.linked?{icon:'ok',tone:'ok',title:'Linked',go:'Open TikPrint Cloud',act:openCloudSite}:
+    cloud.state==='pairing'?{icon:'wait',title:'Scan the ticket to link',code:cloud.code,text:site?`or type the code at ${site}/link`:''}:
+    cloud.state==='expired'?{icon:'bad',title:'Code expired',go:'Try again',act:startLinking}:
+    cloud.state==='failed'?{icon:'bad',tone:'bad',title:'Couldn’t link',text:cloud.message,go:'Try again',act:startLinking}:
+    cloud.state==='starting'||Date.now()-linkAskedAt<4000?{icon:'wait',title:'Getting a code'}:   // the board may not have heard yet
+    {icon:'up',title:'Upgrade to Pro',go:'Link this printer',act:startLinking};
+  const key=JSON.stringify([o.title,o.code,o.text]); if($('cloudPop').dataset.shown===key)return;   // nothing changed: leave the spinner turning
+  $('cloudPop').dataset.shown=key;
+  $('clIco').className='c'+(o.tone?' '+o.tone:''); $('clIco').innerHTML=SHEET_ICONS[o.icon];
+  $('clTitle').textContent=o.title; $('clCode').textContent=o.code||''; $('clText').textContent=o.text||'';
+  $('clGo').hidden=!o.go; $('clGo').textContent=o.go||''; $('clGo').onclick=o.act||null;
 }
 async function refreshCloud(){
   let c=null; try{c=await api('/api/cloud/status',undefined,2500)}catch(e){}
   const ok=c&&typeof c.cloud_url==='string';
   // no answer: not linked, but the address from the last answer still opens
-  cloud={linked:!!(ok&&c.linked), printer_id:ok&&c.linked&&c.printer_id?String(c.printer_id):'', cloud_url:ok?c.cloud_url:cloud.cloud_url};
+  cloud={linked:!!(ok&&c.linked), state:ok&&c.state?String(c.state):'local', code:ok&&c.code?String(c.code):'', message:ok&&c.message?String(c.message):'',
+         printer_id:ok&&c.linked&&c.printer_id?String(c.printer_id):'', cloud_url:ok?c.cloud_url:cloud.cloud_url};
   showCloud();
 }
 let ticket=1, wifi=null;
@@ -919,8 +973,9 @@ addEventListener('scroll',()=>$('bar').classList.toggle('scrolled',scrollY>4),{p
 function closeAll(except){
   if(updating)except='gearPop';     // a firmware update is running: its progress stays on screen
   if(except!=='gearPop')closeSheet();
-  ['wifiPop','gearPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
-  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop');
+  ['wifiPop','gearPop','cloudPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
+  if(except!=='cloudPop')delete $('cloudPop').dataset.shown;   // drawn afresh the next time it opens
+  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('proBtn').classList.toggle('on',except==='cloudPop');
 }
 $('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
