@@ -9,6 +9,10 @@
  * "priority" runs from 1 (normal) to 4 (urgent). "due.date" is a day ("2026-11-22"), a day and time
  * on the user's own clock ("2026-11-22T15:30:00"), or a moment in UTC ("2026-11-22T20:30:00Z").
  * API reference: https://developer.todoist.com/api/v1/ (checked November 2026).
+ *
+ * REFERENCE ONLY: this file is not part of the firmware any more (connectors run in TikPrint Cloud
+ * since firmware 0.4.1). It is kept, unchanged in what it draws, because the cloud's drift test
+ * compares its own tickets with this code, dot for dot (tools/host_test/run.sh ticket ...).
  */
 #include <stdio.h>
 #include <stdlib.h>

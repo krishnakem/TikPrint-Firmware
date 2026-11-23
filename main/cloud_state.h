@@ -6,7 +6,7 @@
 #include "esp_err.h"
 
 /*
- * The printer's link to TikPrint Cloud ("Pro"), kept in NVS.
+ * The printer's link to TikPrint Cloud, kept in NVS.
  *
  * A printer is "linked" when it has a device token saved. The token is what the cloud hands
  * the printer when the two are paired; it is the printer's password for the cloud, so it never

@@ -266,7 +266,7 @@ button.kv:hover{background:var(--hover)}
    side from top to bottom: the top bar and the ticket column both move over into the room that is
    left, so nothing sits on top of the pane. On a narrow screen there is no room to share, so it lies
    over the whole page instead (full width on a phone) and its ✕ closes it.
-   It has two views: the connectors as a grid of apps, and one connector's settings (‹ goes back). */
+   It has two views: the grid of apps, and Weather's settings (‹ goes back). */
 .pane{position:fixed;top:0;right:0;bottom:0;z-index:12;width:var(--pane);display:flex;flex-direction:column;background:var(--card);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .28s cubic-bezier(.2,.8,.2,1),visibility 0s .28s}
 .pane.open{transform:none;visibility:visible;transition:transform .28s cubic-bezier(.2,.8,.2,1)}
 .pane .scroll{flex:1;overflow-y:auto;padding:14px 10px 24px}
@@ -282,26 +282,7 @@ button.kv:hover{background:var(--hover)}
 .app:hover{background:var(--hover)}
 .app .ico{position:relative;width:54px;height:54px;border-radius:15px;display:grid;place-items:center;font:700 20px var(--sans);color:#fff}
 .app small{display:block;margin-top:1px;font-size:11.5px;color:var(--muted)}
-.app.soon .ico{opacity:.5}
 .app .ico.dash{background:transparent;color:var(--muted);border:1.5px dashed var(--line);font-weight:400;font-size:24px}
-.app .ico svg,.wxhead .ico svg{width:52%;height:52%;fill:currentColor}
-.app .ico.line,.wxhead .ico.line{box-shadow:inset 0 0 0 1px rgba(0,0,0,.14)}
-/* a connector the free plan keeps locked while another one is active: its logo fades and gets a small padlock */
-.app.locked .ico svg{opacity:.45}
-.app.locked .ico::after{content:"";position:absolute;right:-4px;bottom:-4px;width:20px;height:20px;border-radius:50%;background:var(--card) center/11px no-repeat;box-shadow:0 0 0 1px var(--line);
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='11' width='14' height='9' rx='2'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E")}
-/* A connector's settings: the same building blocks as weather's */
-.cnwhat{flex:1;min-width:0;font-size:14px}
-.cnfield{display:block;padding:9px 12px}
-.cnfield+.cnfield{border-top:1px solid var(--line)}
-.cnfield span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
-.cnfield input{width:100%;border:1px solid var(--line);border-radius:7px;background:transparent;padding:6px 8px;font:13px var(--mono);color:var(--ink);outline:none}
-.cnfield input:focus{border-color:var(--muted)}
-.cnacts{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
-.cnacts .wxbtn{flex:1}
-.wxbtn.ghost{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
-.locnote a{color:var(--ink);text-underline-offset:2px}
-.locnote:first-child{border-top:0}
 /* a green dot on the icon while that connector prints by itself */
 .app .ico.auto::after{content:"";position:absolute;top:-3px;right:-3px;width:11px;height:11px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2.5px var(--card)}
 main{transition:padding-right .28s cubic-bezier(.2,.8,.2,1)}
@@ -325,12 +306,12 @@ body.offline #offline{display:flex}
 body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .pane,body.offline .toast{display:none!important}
 
 @media (max-width:500px){ .paper,.drop,.row,.tools,.pnote{width:100%} .menubar .mitem .t{display:none} }
-/* The Pro button is words only, so it never loses its label: when the bar gets tight (smaller screens, and medium ones while the Connectors pane takes its share) it is the first to shrink, to its short label ("Pro", or "Cloud" once linked) */
+/* The TikPrint Cloud button is words only, so it never loses its label: when the bar gets tight (smaller screens, and medium ones while the Connectors pane takes its share) it is the first to shrink, to its short label ("Cloud") */
 /* ... and after that a long Wi-Fi name is cut short with "…" rather than wrapping onto a second line */
 .menubar .mitem{white-space:nowrap;flex-shrink:0} .menubar #wifiBtn{flex-shrink:1;min-width:0} #linkLabel{overflow:hidden;text-overflow:ellipsis} .menubar .led{flex-shrink:0}
-#proBtn .s{display:none}
-@media (max-width:760px){ #proBtn .t{display:none} #proBtn .s{display:inline} }
-@media (min-width:861px) and (max-width:1100px){ body.paneopen #proBtn .t{display:none} body.paneopen #proBtn .s{display:inline} }
+#cloudBtn .s{display:none}
+@media (max-width:760px){ #cloudBtn .t{display:none} #cloudBtn .s{display:inline} }
+@media (min-width:861px) and (max-width:1100px){ body.paneopen #cloudBtn .t{display:none} body.paneopen #cloudBtn .s{display:inline} }
 </style>
 </head>
 <body>
@@ -344,7 +325,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
   <button class="mitem" id="wifiBtn"><span class="led off" id="linkLed"></span><span class="t" id="linkLabel">Connecting…</span></button>
   <span class="mitem" id="prnItem" title="Printer"><span class="led off" id="prnLed"></span><span class="t">Printer</span></span>
-  <button class="mitem" id="proBtn" title="Upgrade to Pro" style="visibility:hidden"><span class="t">Upgrade to Pro</span><span class="s">Pro</span></button>
+  <button class="mitem" id="cloudBtn" title="TikPrint Cloud" style="visibility:hidden"><span class="t">TikPrint Cloud</span><span class="s">Cloud</span></button>
   <button class="mitem" id="connBtn" title="Connectors" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg><span class="t">Connectors</span></button>
   <button class="mitem" id="gearBtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
@@ -365,59 +346,14 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
 </div>
 
-<!-- Connectors pane: the connectors as a grid of apps; clicking one shows its settings. Weather is always there; of the other apps the free plan runs one at a time (see CONNECTORS in the script). -->
+<!-- Connectors pane: a grid of apps; clicking Weather shows its settings. Weather is the one connector that runs on the printer.
+     Every other app (Todoist, ...) runs in TikPrint Cloud: the last tile leads there. -->
 <aside class="pane" id="connPop" aria-label="Connectors">
   <div class="scroll">
     <div class="panehead"><button id="connBack" aria-label="Back to all connectors" hidden>‹</button>Connectors<button id="connClose" aria-label="Close connectors">✕</button></div>
     <div class="apps" id="appGrid">
       <button class="app" data-c="weather"><span class="ico" id="appWxIco" style="background:#f5a623">☀</span><span>Weather<small id="connWx"></small></span></button>
-      <div id="appMore" style="display:contents"></div>
-      <button class="app" data-c="add"><span class="ico dash">+</span><span>Add</span></button>
-    </div>
-    <!-- One of the apps in CONNECTORS: connect it with a token, then print now, a schedule and the ticket look.
-         Which of the three parts shows depends on its state (showCnPanel). -->
-    <div id="cnPanel" hidden>
-      <div class="wxhead"><span class="ico" id="cnIco"></span><span class="nm"><span id="cnName"></span><small id="cnState"></small></span><input type="checkbox" class="sw" id="cnOn" aria-label="Print on a schedule"></div>
-      <!-- another connector is active: the free plan's limit, and the two ways on -->
-      <div id="cnLocked">
-        <div class="grp">
-          <div class="locnote" id="cnLockText"></div>
-          <div class="cnacts"><button class="wxbtn ghost" id="cnSwitch">Switch</button><button class="wxbtn cloudbtn" id="cnLockPro">Upgrade to Pro</button></div>
-        </div>
-      </div>
-      <!-- not connected yet: where to get the token, and a box to paste it in -->
-      <div id="cnSetup">
-        <div class="grp">
-          <div class="locnote" id="cnHelp"></div>
-          <div id="cnFields"></div>
-          <div class="cnacts"><button class="wxbtn" id="cnConnect">Connect</button></div>
-          <div class="locnote bad" id="cnNote" role="status" hidden></div>
-        </div>
-      </div>
-      <!-- connected -->
-      <div id="cnLive">
-        <div class="grp wxpad"><div class="wxrow"><span class="cnwhat" id="cnWhat"></span><button class="wxbtn" id="cnPrint">Print now</button></div></div>
-        <h3>Schedule</h3>
-        <div class="grp">
-          <label class="kv"><span class="wxl"><input type="time" id="cnT0" aria-label="Time of the first print"><span>First print</span></span><input type="checkbox" class="sw" id="cnS0"></label>
-          <label class="kv"><span class="wxl"><input type="time" id="cnT1" aria-label="Time of the second print"><span>Second print</span></span><input type="checkbox" class="sw" id="cnS1"></label>
-          <label class="kv"><span class="wxl"><input type="time" id="cnT2" aria-label="Time of the third print"><span>Third print</span></span><input type="checkbox" class="sw" id="cnS2"></label>
-          <div class="locnote">Up to 3 scheduled prints a day. <button class="cloudbtn" id="cnPro">Upgrade to Pro</button> for more.</div>
-        </div>
-        <h3>Ticket look</h3>
-        <div class="grp">
-          <div class="kv"><span>Font</span>
-            <select id="cnFont" aria-label="Font of this connector's tickets">
-              <option>Inter</option><option>Source Serif</option><option>Nunito</option><option>Caveat</option><option>JetBrains Mono</option><option value="Printer">Receipt</option>
-            </select></div>
-          <div class="kv"><span>Text size</span><div class="seg sml" id="cnSize" role="group" aria-label="Text size"><button data-s="0">S</button><button data-s="1">M</button><button data-s="2">L</button></div></div>
-        </div>
-        <h3>Connection</h3>
-        <div class="grp">
-          <div id="cnTails"></div>
-          <button class="kv" id="cnDisc" style="width:100%"><span class="ink">Disconnect</span><span class="go">›</span></button>
-        </div>
-      </div>
+      <button class="app" data-c="cloud"><span class="ico dash">+</span><span>More<small>on TikPrint Cloud</small></span></button>
     </div>
     <!-- Weather: print now, and when it prints by itself -->
     <div id="wxPanel" hidden>
@@ -440,7 +376,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
         <label class="kv"><span class="wxl"><input type="time" id="wxT0" aria-label="Time of the first print"><span>Today</span></span><input type="checkbox" class="sw" id="wxS0"></label>
         <label class="kv"><span class="wxl"><input type="time" id="wxT1" aria-label="Time of the second print"><span>Rest of today</span></span><input type="checkbox" class="sw" id="wxS1"></label>
         <label class="kv"><span class="wxl"><input type="time" id="wxT2" aria-label="Time of the third print"><span>Tomorrow</span></span><input type="checkbox" class="sw" id="wxS2"></label>
-        <div class="locnote">Up to 3 scheduled prints a day. <button class="cloudbtn" id="wxPro">Upgrade to Pro</button> for more.</div>
+        <div class="locnote">Up to 3 scheduled prints a day.</div>
       </div>
       <h3>Ticket look</h3>
       <div class="grp">
@@ -499,7 +435,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   </div>
 </div>
 
-<!-- TikPrint Cloud popover: linking this printer to an account, after "Upgrade to Pro" -->
+<!-- TikPrint Cloud popover: linking this printer to an account, after "TikPrint Cloud" is pressed -->
 <div class="pop" id="cloudPop">
   <div class="sheet" aria-live="polite">
     <div class="c" id="clIco"></div>
@@ -595,33 +531,30 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
 })();
 
 const $=id=>document.getElementById(id);
-/* TikPrint Cloud: where Pro lives. "Pro" means this printer is linked to TikPrint Cloud.
+/* TikPrint Cloud: the website this printer can be linked to, for printing from anywhere and for the
+   connectors that do not run on the printer (Todoist, ...). Linking is free. Whatever an account may do
+   is decided on the website: this page and the printer know nothing about it.
    This page never talks to the cloud itself: the board says whether it is linked, where linking stands and
-   where the cloud is (/api/cloud/status), and every Pro button on the page follows that, through showCloud
-   and openCloud:
-     not linked -> "Upgrade to Pro" (short: "Pro"): the board gets a pairing code from the cloud and prints
-                   a ticket with a QR code. Scanning it and signing in links the printer. Meanwhile the
-                   cloud popover says where things stand (showCloudPop).
-     linked     -> "Open TikPrint Cloud" (short: "Cloud"), opens the cloud at this printer
-   If the board can't be asked, the buttons go back to "Upgrade to Pro".
+   where the cloud is (/api/cloud/status). The "TikPrint Cloud" button in the top bar and the
+   "More on TikPrint Cloud" tile in the Connectors pane both go through openCloud:
+     not linked -> the board gets a pairing code from the cloud and prints a ticket with a QR code.
+                   Scanning it and signing in links the printer. Meanwhile the cloud popover says
+                   where things stand (showCloudPop).
+     linked     -> opens the cloud at this printer (?printer=<its id>)
    Paper is the proof: this page is open to everyone on the same Wi-Fi, so it never gets the pairing code
    (the board keeps it; it is on the ticket only), and unlinking asks for a code from a ticket of its own. */
 let cloud={linked:false,state:'local',message:'',printer_id:'',cloud_url:''};
-const cloudLabel=()=>cloud.linked?'Open TikPrint Cloud':'Upgrade to Pro';
 function showCloud(){
   showCloudPop();
   $('cloudSetH').hidden=$('cloudSet').hidden=!cloud.linked;   // Settings > TikPrint Cloud > Reset / Unlink
-  const label=cloudLabel(), pro=$('proBtn');
-  if(pro.title===label)return;   // nothing changed since the last look
-  pro.title=label; pro.querySelector('.t').textContent=label; pro.querySelector('.s').textContent=cloud.linked?'Cloud':'Pro';
-  document.querySelectorAll('.cloudbtn').forEach(b=>b.textContent=label);
+  $('cloudBtn').title=cloud.linked?'Open TikPrint Cloud':'Link this printer to TikPrint Cloud';
 }
 function openCloudSite(){
   if(!cloud.cloud_url){toast('Can’t reach the printer'); return}
   const url=cloud.cloud_url.replace(/\/+$/,'');
   window.open(cloud.linked&&cloud.printer_id?url+'/?printer='+encodeURIComponent(cloud.printer_id):url,'_blank','noopener');
 }
-/* Every Pro button comes here. */
+/* The TikPrint Cloud button and the "More on TikPrint Cloud" tile come here. */
 function openCloud(){
   if(cloud.linked){openCloudSite(); return}
   // After this click has run its course: a click anywhere outside a popover closes them all.
@@ -649,7 +582,7 @@ function showCloudPop(){
     cloud.state==='expired'?{icon:'bad',title:'Code expired',go:'Try again',act:startLinking}:
     cloud.state==='failed'?{icon:'bad',tone:'bad',title:'Couldn’t link',text:cloud.message,go:'Try again',act:startLinking}:
     cloud.state==='starting'||Date.now()-linkAskedAt<4000?{icon:'wait',title:'Getting a code'}:   // the board may not have heard yet
-    {icon:'up',title:'Upgrade to Pro',go:'Link this printer',act:startLinking};
+    {icon:'up',title:'TikPrint Cloud',go:'Link this printer',act:startLinking};
   const key=JSON.stringify([o.title,o.text]); if($('cloudPop').dataset.shown===key)return;   // nothing changed: leave the spinner turning
   $('cloudPop').dataset.shown=key;
   $('clIco').className='c'+(o.tone?' '+o.tone:''); $('clIco').innerHTML=SHEET_ICONS[o.icon];
@@ -702,7 +635,7 @@ async function refreshCloud(){
   cloud={linked:!!(ok&&c.linked), state:ok&&c.state?String(c.state):'local', message:ok&&c.message?String(c.message):'',
          printer_id:ok&&c.linked&&c.printer_id?String(c.printer_id):'', cloud_url:ok?c.cloud_url:cloud.cloud_url};
   showCloud();
-  $('proBtn').style.visibility='';   // hidden until the board has been asked once, so a linked printer never flashes "Upgrade to Pro"
+  $('cloudBtn').style.visibility='';   // hidden until the board has been asked once: only then is it known what a press should do
 }
 let ticket=1, wifi=null;
 const pad=n=>'#'+String(n).padStart(4,'0');
@@ -980,7 +913,6 @@ function applyStatus(s){
   // The board forgets the time when it loses power: give it back as soon as it says so (also the very first time).
   if(s.settings)applySettings(s.settings);
   showZipPlace(s.automations);
-  showConnectors(s.automations&&s.automations.connectors);
   if(s.printer)showPrinter(s.printer,s.print_queue);
   if(s.time){showClock(s.time); if(!s.time.set&&Date.now()-timeSentAt>TIME_RETRY_MS)sendTime()}
   if(s.wifi&&!joining){$('okName').textContent=s.wifi.ssid;$('okIp').textContent=s.wifi.ip}
@@ -1030,23 +962,21 @@ function closeAll(except){
   if(except!=='gearPop')closeSheet();
   ['wifiPop','gearPop','cloudPop'].forEach(id=>{if(id!==except)$(id).classList.remove('open')});
   if(except!=='cloudPop')delete $('cloudPop').dataset.shown;   // drawn afresh the next time it opens
-  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('proBtn').classList.toggle('on',except==='cloudPop');
+  $('wifiBtn').classList.toggle('on',except==='wifiPop'); $('gearBtn').classList.toggle('on',except==='gearPop'); $('cloudBtn').classList.toggle('on',except==='cloudPop');
 }
 $('wifiBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('wifiPop').classList.contains('open');closeAll(o?'wifiPop':null);$('wifiPop').classList.toggle('open',o);if(o)openWifi()};
 $('gearBtn').onclick=e=>{e.stopPropagation();if(updating)return;const o=!$('gearPop').classList.contains('open');closeAll(o?'gearPop':null);$('gearPop').classList.toggle('open',o)};
 /* The Connectors pane is not a popover: it stays open until its button or its ✕ is pressed. */
-/* which: false = the grid of apps, 'weather', or the id of one of CONNECTORS */
+/* which: false = the grid of apps, 'weather' = Weather's settings */
 function showConn(which){
   $('appGrid').hidden=!!which; $('wxPanel').hidden=which!=='weather'; $('connBack').hidden=!which;
-  cnOpen=which&&which!=='weather'?which:''; cnSwitching=false; $('cnPanel').hidden=!cnOpen;
-  if(cnOpen){showCnNote(''); showCnPanel(true)}
 }
 function showPane(on){
   if(on)showConn(false);   // it always opens on the grid of apps
   $('connPop').classList.toggle('open',on); document.body.classList.toggle('paneopen',on);
   $('connBtn').classList.toggle('on',on); $('connBtn').setAttribute('aria-expanded',on);
 }
-$('proBtn').onclick=openCloud;
+$('cloudBtn').onclick=openCloud;
 $('cloudUnlink').onclick=askUnlink;
 $('connBtn').onclick=()=>showPane(!$('connPop').classList.contains('open'));
 $('connClose').onclick=()=>showPane(false);
@@ -1563,7 +1493,7 @@ document.addEventListener('paste',e=>{
 $('rmImg').onclick=()=>{loadId++;closeJob();imgBits=null;$('pImg').classList.remove('on','busy','turning');$('pNav').classList.remove('on');$('pNote').textContent='';$('file').value=''};
 
 /* ---------- Connectors ---------- */
-/* Weather is the one connector so far. Clicking its app in the Connectors pane shows its settings: "Print now" for
+/* Weather is the one connector that runs on the printer; the others live in TikPrint Cloud. Clicking its app in the Connectors pane shows its settings: "Print now" for
    today, the rest of today or tomorrow; the places (one is selected: tickets are for it, and it is
    the header's location); the schedule (three times a day, each with a switch; the switch at the top
    is for the whole schedule); and the font and size the ticket is drawn in. The board fetches the forecast from the
@@ -1640,7 +1570,6 @@ $('wxAdd').onkeydown=async e=>{
   const town=(await findTowns(v))[0];   // Enter takes the first town suggested
   if(town)addPlace({city:town},town); else showPlaceNote(`No town called “${v}” found.`,true);
 };
-$('wxPro').onclick=openCloud;
 $('wxPrint').onclick=printWeather;
 async function printWeather(){
   if(weatherBusy)return;
@@ -1715,153 +1644,9 @@ async function showPrinted(t,wordsToo){
 }
 $('appGrid').addEventListener('click',e=>{
   const b=e.target.closest('.app'); if(!b)return;
-  const id=b.dataset.c, c=CONNECTORS.find(x=>x.id===id);
-  if(id==='weather')showConn('weather');
-  else if(c&&c.pro)openCloud();                                        // needs a sign-in with the app: TikPrint Cloud does that
-  else if(c&&cn&&cn.available.includes(id))showConn(id);
-  else toast('Coming soon');
+  if(b.dataset.c==='weather')showConn('weather');
+  else openCloud();   // "More on TikPrint Cloud": link this printer, or open the site if it is linked
 });
-
-/* ---------- Connectors: apps that print a list (Todoist, GitHub, ...) ----------
-   Each runs on the printer, with a token pasted in here. The free plan runs ONE at a time, with up to
-   3 scheduled prints a day, and lets you change to another app once a day. The printer enforces that
-   (main/connectors.c); this page only shows it. Everything beyond is Pro, on TikPrint Cloud.
-   To add an app: one entry here, and its code in the firmware (main/conn_<app>.c). Logos: Simple Icons (CC0). */
-const CONNECTORS=[
-  {id:'todoist',name:'Todoist',color:'#e44332',what:'Today’s and overdue tasks',
-   help:'Paste your API token from',link:'https://app.todoist.com/app/settings/integrations/developer',linkText:'Todoist › Settings › Integrations › Developer',
-   fields:['API token'],logo:'M21 0H3C1.35 0 0 1.35 0 3v3.858s3.854 2.24 4.098 2.38c.31.18.694.177 1.004 0 .26-.147 8.02-4.608 8.136-4.675.279-.161.58-.107.748-.01.164.097.606.348.84.48.232.134.221.502.013.622l-9.712 5.59c-.346.2-.69.204-1.048.002C3.478 10.907.998 9.463 0 8.882v2.02l4.098 2.38c.31.18.694.177 1.004 0 .26-.147 8.02-4.609 8.136-4.676.279-.16.58-.106.748-.008.164.096.606.347.84.48.232.133.221.5.013.62-.208.121-9.288 5.346-9.712 5.59-.346.2-.69.205-1.048.002C3.478 14.951.998 13.506 0 12.926v2.02l4.098 2.38c.31.18.694.177 1.004 0 .26-.147 8.02-4.609 8.136-4.676.279-.16.58-.106.748-.009.164.097.606.348.84.48.232.133.221.502.013.622l-9.712 5.59c-.346.199-.69.204-1.048.001C3.478 18.994.998 17.55 0 16.97V21c0 1.65 1.35 3 3 3h18c1.65 0 3-1.35 3-3V3c0-1.65-1.35-3-3-3z'},
-  {id:'github',name:'GitHub',color:'#181717',what:'Issues, pull requests and review requests',
-   help:'Make a personal access token at',link:'https://github.com/settings/tokens',linkText:'GitHub › Settings › Developer settings',
-   fields:['Personal access token'],logo:'M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'},
-  {id:'notion',name:'Notion',color:'#fff',ink:'#000',what:'Items due today',
-   help:'Make an integration, share your database with it, and paste both from',link:'https://www.notion.so/profile/integrations',linkText:'Notion › Integrations',
-   fields:['Integration token','Database ID'],logo:'M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z'},
-  {id:'gcal',name:'Google Calendar',color:'#4285f4',pro:true,logo:'M18.316 5.684H24v12.632h-5.684V5.684zM5.684 24h12.632v-5.684H5.684V24zM18.316 5.684V0H1.895A1.894 1.894 0 0 0 0 1.895v16.421h5.684V5.684h12.632zm-7.207 6.25v-.065c.272-.144.5-.349.687-.617s.279-.595.279-.982c0-.379-.099-.72-.3-1.025a2.05 2.05 0 0 0-.832-.714 2.703 2.703 0 0 0-1.197-.257c-.6 0-1.094.156-1.481.467-.386.311-.65.671-.793 1.078l1.085.452c.086-.249.224-.461.413-.633.189-.172.445-.257.767-.257.33 0 .602.088.816.264a.86.86 0 0 1 .322.703c0 .33-.12.589-.36.778-.24.19-.535.284-.886.284h-.567v1.085h.633c.407 0 .748.109 1.02.327.272.218.407.499.407.843 0 .336-.129.614-.387.832s-.565.327-.924.327c-.351 0-.651-.103-.897-.311-.248-.208-.422-.502-.521-.881l-1.096.452c.178.616.505 1.082.977 1.401.472.319.984.478 1.538.477a2.84 2.84 0 0 0 1.293-.291c.382-.193.684-.458.902-.794.218-.336.327-.72.327-1.149 0-.429-.115-.797-.344-1.105a2.067 2.067 0 0 0-.881-.689zm2.093-1.931l.602.913L15 10.045v5.744h1.187V8.446h-.827l-2.158 1.557zM22.105 0h-3.289v5.184H24V1.895A1.894 1.894 0 0 0 22.105 0zm-3.289 23.5l4.684-4.684h-4.684V23.5zM0 22.105C0 23.152.848 24 1.895 24h3.289v-5.184H0v3.289z'},
-  {id:'gmail',name:'Gmail',color:'#ea4335',pro:true,logo:'M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z'},
-];
-let cn=null;            // "connectors" from the board's status: which one is active, the schedule, ...
-let cnOpen='';          // the app whose settings are showing ('' = none)
-let cnSwitching=false;  // "Switch" was pressed on a locked app: its token box is showing
-let cnSaving=0, cnBusy=false, cnTilesShown='';
-const cnLogo=c=>`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${c.logo}"/></svg>`;
-const cnIcoStyle=c=>`background:${c.color};color:${c.ink||'#fff'}`;
-const cnWait=()=>cn.switch.in_days>1?`in ${cn.switch.in_days} days`:'tomorrow';
-
-/* Take in the board's status (also sent back after every change). */
-function showConnectors(c){
-  if(!c)return;
-  cn=c;
-  const slots=c.schedule.slots.filter(s=>s.on).length, auto=c.active&&c.schedule.on&&slots;
-  // The tiles. Rebuilt only when something they show has changed.
-  const key=JSON.stringify([c.available,c.active,auto,slots,c.switch]);
-  if(key!==cnTilesShown){
-    cnTilesShown=key;
-    $('appMore').innerHTML=CONNECTORS.map(a=>{
-      const have=c.available.includes(a.id), active=c.active===a.id, locked=have&&c.active&&!active;
-      const hint=a.pro?'Pro':!have?'Soon':active?(auto?slots+' a day':'Off'):!locked?'Set up'
-                :!c.switch.clock_set?'Locked':c.switch.locked?'Switch '+cnWait():'Switch';
-      return `<button class="app${!have&&!a.pro?' soon':''}${locked?' locked':''}" data-c="${a.id}"><span class="ico${active&&auto?' auto':''}${a.ink?' line':''}" style="${cnIcoStyle(a)}">${cnLogo(a)}</span><span>${a.name}<small>${hint}</small></span></button>`;
-    }).join('');
-  }
-  if(cnOpen)showCnPanel(false);
-}
-function showCnNote(text,pro){
-  const n=$('cnNote'); n.hidden=!text; n.textContent=text;
-  if(text&&pro){const b=document.createElement('button'); b.className='cloudbtn'; b.textContent=cloudLabel(); b.onclick=openCloud; n.append(' ',b)}
-}
-/* Draw the open app's settings. fresh: it was just opened, so build the parts that are only built once. */
-function showCnPanel(fresh){
-  const c=CONNECTORS.find(x=>x.id===cnOpen); if(!c||!cn)return;
-  const active=cn.active===c.id, other=cn.active&&!active?CONNECTORS.find(x=>x.id===cn.active):null;
-  const slots=cn.schedule.slots.filter(s=>s.on).length;
-  if(fresh){
-    $('cnIco').style.cssText=cnIcoStyle(c); $('cnIco').className='ico'+(c.ink?' line':''); $('cnIco').innerHTML=cnLogo(c);
-    $('cnName').textContent=c.name; $('cnWhat').textContent=c.what;
-    $('cnHelp').innerHTML=`${esc(c.help)} <a href="${c.link}" target="_blank" rel="noopener">${esc(c.linkText)}</a>.`;
-    $('cnFields').innerHTML=c.fields.map((f,i)=>`<label class="cnfield"><span>${esc(f)}</span><input type="${i?'text':'password'}" id="cnF${i}" maxlength="159" autocomplete="off" spellcheck="false" autocapitalize="off"></label>`).join('');
-  }
-  $('cnState').textContent=active?(cn.schedule.on&&slots?slots+' a day':'Schedule off'):other?'Locked':'Not connected';
-  $('cnOn').hidden=!active;
-  $('cnLocked').hidden=!other||cnSwitching; $('cnSetup').hidden=active||(other&&!cnSwitching); $('cnLive').hidden=!active;
-  if(other){
-    const sw=cn.switch, can=sw.clock_set&&!sw.locked;
-    $('cnLockText').textContent=`The free plan runs one connector at a time, and ${other.name} is the one. `+
-      (can?`You can switch to ${c.name}: one switch a day.`:!sw.clock_set?'To switch, the printer first needs to know the time.':`You can switch again ${cnWait()}.`);
-    $('cnSwitch').hidden=!can; $('cnSwitch').textContent='Switch to '+c.name;
-    $('cnConnect').textContent='Switch to '+c.name;
-  }else $('cnConnect').textContent='Connect';
-  if(!active||cnSaving)return;   // while a change is on its way, an older status must not undo it
-  $('cnOn').checked=cn.schedule.on;
-  cn.schedule.slots.forEach((s,i)=>{if(document.activeElement!==$('cnT'+i))$('cnT'+i).value=s.time; $('cnS'+i).checked=s.on});
-  $('cnFont').value=cn.look.font; $('cnSize').classList.toggle('off',cn.look.font==='Printer');
-  $('cnSize').querySelectorAll('button').forEach(b=>b.classList.toggle('on',+b.dataset.s===cn.look.size));
-  $('cnTails').innerHTML=c.fields.map((f,i)=>`<div class="kv"><span>${esc(f)}</span><span>${cn.fields[i]&&cn.fields[i].tail?'••••'+esc(cn.fields[i].tail):'saved'}</span></div>`).join('');
-}
-/* Send a change to the board. Returns its answer, or null if it could not be reached. */
-async function saveConn(change){
-  cnSaving++;
-  let r=null; try{r=await api('/api/connectors',change)}catch(e){}
-  cnSaving--;
-  if(r&&r.automations)showConnectors(r.automations.connectors); else refreshStatus();
-  return r;
-}
-async function saveConnSetting(change){
-  const r=await saveConn(change);
-  if(!r||!r.ok)toast((r&&r.message)||'Couldn’t save that');
-}
-$('cnConnect').onclick=async()=>{
-  const c=CONNECTORS.find(x=>x.id===cnOpen); if(!c)return;
-  const fields=c.fields.map((f,i)=>$('cnF'+i).value.trim());
-  if(fields.some(f=>!f)){showCnNote(c.fields.length>1?'Fill in both boxes.':'Paste the token first.');return}
-  $('cnConnect').disabled=true;
-  const r=await saveConn({connect:c.id,fields,switch:cnSwitching});
-  $('cnConnect').disabled=false;
-  if(r&&r.ok){cnSwitching=false; showCnNote(''); showCnPanel(true); toast(c.name+' connected'); return}
-  // connector_limit, switch_locked: the free plan's limits, so the way out is offered with them
-  showCnNote(r?r.message+'.':'Can’t reach the printer.',r&&(r.error==='connector_limit'||r.error==='switch_locked'));
-};
-$('cnSwitch').onclick=()=>{cnSwitching=true; showCnNote(''); showCnPanel(false); $('cnF0').focus()};
-$('cnLockPro').onclick=$('cnPro').onclick=openCloud;
-$('cnDisc').onclick=async()=>{
-  const c=CONNECTORS.find(x=>x.id===cnOpen);
-  if(!confirm(`Disconnect ${c.name}? Its token is erased from the printer.`))return;
-  const r=await saveConn({disconnect:true});
-  if(r&&r.ok){showCnPanel(true); toast(c.name+' disconnected')}else toast('Couldn’t reach the printer');
-};
-$('cnOn').onchange=()=>saveConnSetting({on:$('cnOn').checked});
-function saveConnSlots(){
-  const slots=[0,1,2].map(i=>({time:$('cnT'+i).value,on:$('cnS'+i).checked}));
-  if(slots.some(s=>!s.time)){refreshStatus();return}   // a time box was emptied: put the saved time back
-  saveConnSetting({slots});
-}
-[0,1,2].forEach(i=>{$('cnT'+i).onchange=saveConnSlots; $('cnS'+i).onchange=saveConnSlots});
-$('cnFont').onchange=()=>saveConnSetting({font:$('cnFont').value});
-$('cnSize').onclick=e=>{const b=e.target.closest('button'); if(b)saveConnSetting({size:+b.dataset.s})};
-$('cnPrint').onclick=async()=>{
-  const c=CONNECTORS.find(x=>x.id===cnOpen);
-  if(cnBusy||!c)return;
-  cnBusy=true; $('cnPrint').disabled=true; $('cnPrint').textContent='Getting…';
-  try{
-    const t0=Date.now();
-    let r=null; try{r=await api('/api/connectors/print-now',{})}catch(e){}
-    if(!r||!r.ok){toast((r&&r.message)||'Couldn’t reach the printer');return}
-    // The board answers at once and fetches in the background: wait until it says how it went.
-    for(let i=0;i<40;i++){
-      await wait(1000);
-      let s=null; try{s=await api('/api/status',undefined,2500)}catch(e){}
-      const k=s&&s.automations&&s.automations.connectors;
-      // "last" may still be an earlier print: only one that finished after this press counts
-      if(!k||k.busy||!k.last||k.last.s_ago*1000>Date.now()-t0+3000)continue;
-      if(!k.last.ok){toast(k.last.message);return}
-      toast('Printing from '+c.name);
-      const t=await lastTicket(k.last.ticket);
-      if(t)await showPrinted(t,false);
-      return;
-    }
-    toast(c.name+' is taking a long time. Check the Wi-Fi');
-  }finally{cnBusy=false; $('cnPrint').disabled=false; $('cnPrint').textContent='Print now'}
-};
 $('rmSrc').onclick=()=>{$('pSrc').classList.remove('on');setDoc('')};
 
 /* ---------- Editor ---------- */
@@ -1882,8 +1667,8 @@ const FONTS=[
 ];
 const SIZES=[8,9,10,11,12,14,16,18,24,30,36,48];   // sizes offered, in points, true to size on paper
 const DOTS_PER_PT=203/72;                          // the printer has 203 dots per inch, a point is 1/72 inch
-const TITLE_PX=Math.round(16*DOTS_PER_PT);         // heading size used when a connector fills the ticket
-const HEAD_SIZE=20;     // the "TODOIST · TODAY" line (only on tickets filled by a connector), in dots
+const TITLE_PX=Math.round(16*DOTS_PER_PT);         // heading size of a new ticket's Title line
+const HEAD_SIZE=20;     // the source line under the header, on tickets that have one, in dots
 const HDR_PAD=10;       // gap between the header and the text when there is no such line
 const HDR_SIZE=17;      // the "TikPrint | Los Angeles ... NOV 20, 2026 | 10:05 PM PST" line above it, in dots
 const HDR_H=Math.round(HDR_SIZE*1.4)+8;   // room that line takes

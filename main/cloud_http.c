@@ -1,5 +1,5 @@
 /*
- * One HTTPS call to TikPrint Cloud (see cloud_http.h). Modelled on conn_http.c.
+ * One HTTPS call to TikPrint Cloud (see cloud_http.h). Modelled on nws_get() in weather.c.
  */
 #include <stdlib.h>
 #include <string.h>

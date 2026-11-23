@@ -1,6 +1,5 @@
 #!/bin/sh
-# Try connector code on a computer (see README.txt).
-#   run.sh rules
+# Try board code on a computer (see README.txt).
 #   run.sh code
 #   run.sh ticket <app> <reply.json> [out.png] [font] [size 0-2]
 set -e
@@ -9,19 +8,13 @@ out=${TMPDIR:-/tmp}/tikprint_host_test
 mkdir -p "$out"
 cd "$fw"   # everything below is named from the firmware folder, so that spaces in the path above it do not matter
 here=tools/host_test
+ref=$here/reference   # connector ticket code that left the firmware: host-only, kept for the cloud's drift test
 cjson=managed_components/espressif__cjson/cJSON
-flags="-std=gnu11 -O1 -g -Wall -I$here/shims -Imain -I$cjson"
-drawing="main/conn_ticket.c main/ticket_draw.c $cjson/cJSON.c $here/fonts.S"
-apps="main/conn_todoist.c"
+flags="-std=gnu11 -O1 -g -Wall -I$here/shims -I$ref -Imain -I$cjson"
+drawing="$ref/conn_ticket.c main/ticket_draw.c $cjson/cJSON.c $here/fonts.S"
+apps="$ref/conn_todoist.c"
 
 case "$1" in
-rules)
-    cc $flags -Dtime=test_time "-DCONNECTORS_TEST_APPS=&conn_test_a, &conn_test_b," \
-        -o "$out/test_rules" $here/test_rules.c main/connectors.c $drawing $apps
-    rm -f "$out/nvs.tmp"
-    TZ=America/Detroit "$out/test_rules" before "$out/nvs.tmp" && TZ=America/Detroit "$out/test_rules" after "$out/nvs.tmp"
-    rm -f "$out/nvs.tmp"
-    ;;
 code)
     cc $flags -o "$out/test_code" $here/test_code.c main/paper_code.c
     "$out/test_code"
@@ -34,5 +27,5 @@ ticket)
     echo "ticket drawn: $png"
     ;;
 *)
-    sed -n '2,6p' "$0"; exit 2 ;;
+    sed -n '2,4p' "$0"; exit 2 ;;
 esac

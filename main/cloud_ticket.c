@@ -26,7 +26,7 @@
  *                     Good for 2 minutes.
  *              Didn't ask for this? Do nothing: the printer stays linked.
  *
- * They are drawn as dots in the font of the ticket header, like the tickets of the connectors. If the
+ * They are drawn as dots in the font of the ticket header, like weather tickets. If the
  * board has no letters for that font, the words print in the printer's built-in font instead,
  * with the QR code below them.
  */
