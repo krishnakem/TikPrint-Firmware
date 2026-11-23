@@ -36,7 +36,17 @@ static const char *TAG = "connectors";
 #define SLOT_RETRY_MS   60000   // ... trying this often
 
 /* Every app this firmware has, ending with NULL. Each one is in its own file (conn_<app>.c). */
+extern const connector_t conn_todoist;
+
+#ifdef CONNECTORS_TEST_APPS   /* only when built by tools/host_test, which adds two pretend apps */
+extern const connector_t conn_test_a, conn_test_b;
+#else
+#define CONNECTORS_TEST_APPS
+#endif
+
 static const connector_t *const ALL[] = {
+    &conn_todoist,
+    CONNECTORS_TEST_APPS
     NULL,
 };
 
@@ -124,20 +134,6 @@ const connector_t *connectors_find(const char *id)
         }
     }
     return NULL;
-}
-
-void conn_list_add(conn_list_t *list, const char *text, const char *note)
-{
-    if (list->count < CONN_ITEMS_MAX) {
-        conn_item_t *item = &list->item[list->count];
-        conn_clean_text(item->text, sizeof(item->text), text);
-        conn_clean_text(item->note, sizeof(item->note), note ? note : "");
-        if (!item->text[0]) {
-            strlcpy(item->text, "(no name)", sizeof(item->text));   // e.g. a task named with an emoji only
-        }
-        list->count++;
-    }
-    list->total++;
 }
 
 /* ---------- Saving ---------- */

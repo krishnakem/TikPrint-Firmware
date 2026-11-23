@@ -102,6 +102,20 @@ void conn_clean_text(char *out, size_t size, const char *in)
     out[n] = 0;
 }
 
+void conn_list_add(conn_list_t *list, const char *text, const char *note)
+{
+    if (list->count < CONN_ITEMS_MAX) {
+        conn_item_t *item = &list->item[list->count];
+        conn_clean_text(item->text, sizeof(item->text), text);
+        conn_clean_text(item->note, sizeof(item->note), note ? note : "");
+        if (!item->text[0]) {
+            strlcpy(item->text, "(no name)", sizeof(item->text));   // e.g. a task named with an emoji only
+        }
+        list->count++;
+    }
+    list->total++;
+}
+
 /* ---------- The ticket ---------- */
 
 void conn_ticket_title(char *out, size_t size, const connector_t *connector, const conn_list_t *list)
