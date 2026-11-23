@@ -6,8 +6,8 @@
  * task, "cloud". That task only exists while there is something to do: while pairing, and for as
  * long as the printer is linked. A printer that is not linked has no such task and makes no calls.
  *
- * The web server asks for things by setting a flag (s_want_pair) and waking the task; it reads
- * how things stand from s_status. Both are guarded by s_lock.
+ * The web server asks for things by setting a flag (s_want_pair, s_want_unlink) and waking the
+ * task; it reads how things stand from s_status. All of that is guarded by s_lock.
  *
  * Printing from anywhere, once linked:
  *   every 10 s   GET jobs          "anything for me?" (this is also what shows the printer as online)
@@ -57,6 +57,8 @@ static SemaphoreHandle_t s_wake;      // given whenever the task should look aga
 static cloud_status_t s_status;
 static bool s_task_running;
 static bool s_want_pair;              // Upgrade was pressed
+static bool s_want_unlink;            // Reset / Unlink was pressed: tell the cloud, with s_unlink_token
+static char s_unlink_token[CLOUD_TOKEN_MAX];   // the token that was just deleted, kept only until the cloud has been told
 static int64_t s_pair_until_us;       // when the pairing code runs out (board uptime)
 static int s_pair_every_s;
 /* The print queue's task tells the cloud task that the cloud job in the queue has ended: */
@@ -484,6 +486,52 @@ static int check_in(void)
     return linked ? s_poll_every_s : 0;
 }
 
+/* ---------- Unlinking ---------- */
+
+static esp_err_t start_task_locked(void);
+
+/* Reset / Unlink was pressed and the token is deleted already (cloud_unlink). Tell the cloud, so
+ * that the website stops listing the printer. Whatever the answer, or with none at all, the
+ * printer stays unlinked. */
+static void tell_cloud_unlinked(void)
+{
+    char token[CLOUD_TOKEN_MAX];
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(token, s_unlink_token, sizeof(token));
+    memset(s_unlink_token, 0, sizeof(s_unlink_token));
+    xSemaphoreGive(s_lock);
+    cloud_jobs_clear();
+    s_in_queue.active = false;
+    s_stuck.id[0] = 0;
+    if (token[0]) {
+        cloud_reply_t reply;
+        cloud_http(&(cloud_request_t){ .post = true, .path = "/api/device/unlink", .auth = CLOUD_AUTH_TOKEN,
+                                       .token = token, .max_bytes = JSON_MAX }, &reply);
+        ESP_LOGI(TAG, "unlinked: %s", reply.status == 200 || reply.status == 401 ? "the cloud knows"
+                 : "the cloud was not reached, the website will still list the printer");
+        cloud_reply_free(&reply);
+        memset(token, 0, sizeof(token));
+    }
+}
+
+void cloud_unlink(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    // Keep the token for one last call, then delete it from the board before anything else happens.
+    if (cloud_state_get_token(s_unlink_token, sizeof(s_unlink_token))) {
+        s_want_unlink = true;
+    }
+    cloud_state_clear();
+    s_want_pair = false;
+    s_status = (cloud_status_t){ .phase = CLOUD_LOCAL };
+    if (s_want_unlink) {
+        start_task_locked();   // if it cannot start, the cloud is not told; the printer is unlinked all the same
+    }
+    xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_wake);
+    ESP_LOGW(TAG, "Reset / Unlink pressed: token deleted, back to local only");
+}
+
 /* ---------- The task ---------- */
 
 static void cloud_task(void *arg)
@@ -491,14 +539,19 @@ static void cloud_task(void *arg)
     ESP_LOGI(TAG, "cloud task started");
     for (;;) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        bool pair = s_want_pair;
-        s_want_pair = false;
+        bool pair = s_want_pair, unlink = s_want_unlink;
+        s_want_pair = s_want_unlink = false;
         cloud_phase_t phase = s_status.phase;
         int every_s = s_pair_every_s;
         xSemaphoreGive(s_lock);
 
+        if (unlink) {
+            tell_cloud_unlinked();
+        }
         if (pair) {
             pair_start();
+        } else if (unlink) {
+            // look again: nothing else was asked for, so the task ends below
         } else if (phase == CLOUD_PAIRING) {
             wait_s(every_s);
             if (phase_now() == CLOUD_PAIRING) {
@@ -514,7 +567,7 @@ static void cloud_task(void *arg)
             // nobody, until Upgrade is pressed again.
             cloud_http_close();
             xSemaphoreTake(s_lock, portMAX_DELAY);
-            if (!s_want_pair) {
+            if (!s_want_pair && !s_want_unlink) {
                 s_task_running = false;
                 xSemaphoreGive(s_lock);
                 ESP_LOGI(TAG, "cloud task ended: nothing to do");
