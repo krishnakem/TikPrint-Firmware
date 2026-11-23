@@ -146,3 +146,36 @@ int ticket_draw_text(ticket_canvas_t *canvas, const ticket_face_t *face, int x, 
     }
     return x;
 }
+
+void ticket_draw_wrapped(ticket_canvas_t *c, const ticket_face_t *face, int x, int *y, const char *text, size_t len)
+{
+    const char *p = text, *end = text + len;
+    int space = ticket_text_width(face, " ", 1), pen = x;
+    while (p < end) {
+        while (p < end && *p == ' ') {
+            p++;
+        }
+        const char *word = p;
+        while (p < end && *p != ' ') {
+            p++;
+        }
+        if (p == word) {
+            break;
+        }
+        int w = ticket_text_width(face, word, (size_t)(p - word));
+        if (pen > x && pen + space + w > PRINTER_WIDTH_DOTS) {
+            *y += ticket_face_line(face);
+            pen = x;
+        }
+        if (pen > x) {
+            pen += space;
+        }
+        pen = ticket_draw_text(c, face, pen, *y, word, (size_t)(p - word));
+    }
+    *y += ticket_face_line(face);
+}
+
+void ticket_draw_right(ticket_canvas_t *c, const ticket_face_t *face, int x_right, int y, const char *text, size_t len)
+{
+    ticket_draw_text(c, face, x_right - ticket_text_width(face, text, len), y, text, len);
+}

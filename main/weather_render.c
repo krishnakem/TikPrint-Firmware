@@ -24,41 +24,6 @@
 static const int TEXT_SIZE[3]  = { 22, 25, 29 };   // small, medium, large (sizes made by tools/make_ticket_fonts.py)
 static const int TITLE_SIZE[3] = { 44, 52, 60 };
 
-/* Draw text starting at x, breaking it between words so it stays on the paper. Moves *y below it. */
-static void draw_wrapped(ticket_canvas_t *c, const ticket_face_t *face, int x, int *y, const char *text, size_t len)
-{
-    const char *p = text, *end = text + len;
-    int space = ticket_text_width(face, " ", 1), pen = x;
-    while (p < end) {
-        while (p < end && *p == ' ') {
-            p++;
-        }
-        const char *word = p;
-        while (p < end && *p != ' ') {
-            p++;
-        }
-        if (p == word) {
-            break;
-        }
-        int w = ticket_text_width(face, word, (size_t)(p - word));
-        if (pen > x && pen + space + w > WIDTH) {
-            *y += ticket_face_line(face);
-            pen = x;
-        }
-        if (pen > x) {
-            pen += space;
-        }
-        pen = ticket_draw_text(c, face, pen, *y, word, (size_t)(p - word));
-    }
-    *y += ticket_face_line(face);
-}
-
-/* Draw text so that it ends at x_right. */
-static void draw_right(ticket_canvas_t *c, const ticket_face_t *face, int x_right, int y, const char *text, size_t len)
-{
-    ticket_draw_text(c, face, x_right - ticket_text_width(face, text, len), y, text, len);
-}
-
 /* How many bytes of text fit in `room` dots (whole characters only). */
 static size_t fitting(const ticket_face_t *face, const char *text, size_t len, int room)
 {
@@ -102,11 +67,11 @@ bool weather_render(ticket_canvas_t *c, int font, int size, int header_font, con
         head = head_small;
     }
     ticket_draw_text(c, head, 0, y, left, strlen(left));
-    draw_right(c, head, WIDTH, y, right, strlen(right));
+    ticket_draw_right(c, head, WIDTH, y, right, strlen(right));
     y += ticket_face_line(head) + 8;
 
     if (source[0]) {
-        draw_wrapped(c, small, 0, &y, source, strlen(source));
+        ticket_draw_wrapped(c, small, 0, &y, source, strlen(source));
         y += 6;
     }
     if (icon != WEATHER_ICON_NONE) {
@@ -114,7 +79,7 @@ bool weather_render(ticket_canvas_t *c, int font, int size, int header_font, con
         y += WEATHER_ICON_STRIP_ROWS + 8;
     }
     if (title[0]) {
-        draw_wrapped(c, big, 0, &y, title, strlen(title));
+        ticket_draw_wrapped(c, big, 0, &y, title, strlen(title));
         y += 6;
     }
 
@@ -143,7 +108,7 @@ bool weather_render(ticket_canvas_t *c, int font, int size, int header_font, con
             cell_len[cells - 1] = (size_t)(p + len - cell[cells - 1]);
             const int ends[3] = { hour_end, temp_end, chance_end };
             for (int i = 0; i < cells && i < 3; i++) {
-                draw_right(c, text, ends[i], y, cell[i], cell_len[i]);
+                ticket_draw_right(c, text, ends[i], y, cell[i], cell_len[i]);
             }
             if (cells == 4) {
                 int x = chance_end + gap;
@@ -157,19 +122,19 @@ bool weather_render(ticket_canvas_t *c, int font, int size, int header_font, con
             int left_w = ticket_text_width(bold, p + 1, left_len);
             int right_w = tab ? ticket_text_width(text, tab + 1, right_len) : 0;
             if (tab && left_w + gap + right_w <= WIDTH) {
-                draw_right(c, text, WIDTH, y, tab + 1, right_len);   // both fit on one line
+                ticket_draw_right(c, text, WIDTH, y, tab + 1, right_len);   // both fit on one line
                 right_len = 0;
             }
-            draw_wrapped(c, bold, 0, &y, p + 1, left_len);
+            ticket_draw_wrapped(c, bold, 0, &y, p + 1, left_len);
             if (right_len) {
-                draw_wrapped(c, text, 0, &y, tab + 1, right_len);
+                ticket_draw_wrapped(c, text, 0, &y, tab + 1, right_len);
             }
         } else {
             int indent = 0;
             while ((size_t)indent < len && p[indent] == ' ') {
                 indent++;
             }
-            draw_wrapped(c, text, indent * ticket_text_width(text, " ", 1), &y, p, len);
+            ticket_draw_wrapped(c, text, indent * ticket_text_width(text, " ", 1), &y, p, len);
         }
         p += len + (eol ? 1 : 0);
     }

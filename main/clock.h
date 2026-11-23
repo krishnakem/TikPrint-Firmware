@@ -56,3 +56,7 @@ const char *clock_source_name(clock_source_t source);   // "browser", "internet"
  * Returns false (and writes "") if the clock is not set.
  */
 bool clock_format_now(char *out, size_t size, const char *format);
+
+/** A day as a number like 20261121 (local time), for "has this already happened today?" checks.
+ *  unix_s is a time in seconds, as time(NULL) gives it. */
+int32_t clock_day_number(int64_t unix_s);

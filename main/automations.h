@@ -45,3 +45,10 @@ esp_err_t automations_weather_run_slot(int slot);
 void automations_weather_zip_changed(void);
 
 void automations_get_weather_status(automations_weather_status_t *out);
+
+/**
+ * Fetch the active connector's list (connectors.h) and put a ticket in the print queue, now.
+ * Returns at once; the outcome shows up in connectors_get_status(). A manual print: not limited.
+ *   ESP_ERR_INVALID_STATE  the task is still busy with an earlier request
+ */
+esp_err_t automations_connector_print_now(void);
