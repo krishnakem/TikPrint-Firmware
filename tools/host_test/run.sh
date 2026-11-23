@@ -1,6 +1,7 @@
 #!/bin/sh
 # Try connector code on a computer (see README.txt).
 #   run.sh rules
+#   run.sh code
 #   run.sh ticket <app> <reply.json> [out.png] [font] [size 0-2]
 set -e
 fw=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,6 +22,10 @@ rules)
     TZ=America/Detroit "$out/test_rules" before "$out/nvs.tmp" && TZ=America/Detroit "$out/test_rules" after "$out/nvs.tmp"
     rm -f "$out/nvs.tmp"
     ;;
+code)
+    cc $flags -o "$out/test_code" $here/test_code.c main/paper_code.c
+    "$out/test_code"
+    ;;
 ticket)
     png=${4:-$out/ticket.png}
     cc $flags -o "$out/test_ticket" $here/test_ticket.c $drawing $apps
@@ -29,5 +34,5 @@ ticket)
     echo "ticket drawn: $png"
     ;;
 *)
-    sed -n '2,5p' "$0"; exit 2 ;;
+    sed -n '2,6p' "$0"; exit 2 ;;
 esac

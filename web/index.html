@@ -237,11 +237,16 @@ button.kv:hover{background:var(--hover)}
 .sheet .link{display:block;margin:10px auto 0;color:var(--muted);font-size:13px}
 .sheet .link:hover{color:var(--ink)}
 .sheet .btn{display:block;width:calc(100% - 20px);height:36px;margin:16px auto 0;border-radius:9px;background:var(--btn);color:var(--btn-ink);font-size:14px;font-weight:600}
-/* Linking to TikPrint Cloud: the same sheet in a popover of its own, with the pairing code in it */
+/* Linking to TikPrint Cloud: the same sheet in a popover of its own. The pairing code is never shown here: it is on the ticket only */
 #cloudPop .sheet{display:block}
-.sheet code{display:inline-block;margin:10px 0 4px;font:600 19px var(--mono);letter-spacing:.06em;padding:7px 12px;border:1px dashed var(--line);border-radius:8px}
-.sheet code:empty,.sheet .btn[hidden]{display:none}
-#clText{white-space:pre-line}   /* the site's address gets a line of its own, so it is not broken in two */
+.sheet .btn[hidden]{display:none}
+/* Unlinking: the box for the code from the ticket */
+.sheet input.code{display:block;width:150px;margin:12px auto 0;text-align:center;font:600 19px var(--mono);letter-spacing:.14em;padding:7px 0 7px .14em;border:1px dashed var(--line);border-radius:8px;background:transparent;color:var(--ink);outline:none}
+.sheet input.code:focus{border-style:solid;border-color:var(--ink)}
+.sheet input.code::placeholder{color:var(--muted);opacity:.5}
+.sheet input.code[hidden]{display:none}
+.sheet .btn:disabled{opacity:.4;cursor:default}
+#clText,#shText{white-space:pre-line}   /* the site's address gets a line of its own, so it is not broken in two */
 /* Upload progress */
 .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px 10px 8px}
 .bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--ink);transition:width .25s}
@@ -488,6 +493,7 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
     <b id="shTitle"></b>
     <div class="bar" id="shBar"><i></i></div>
     <p id="shText"></p>
+    <input class="code" id="shCode" hidden type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="000000" autocomplete="off" aria-label="Code from the ticket">
     <button class="btn" id="shGo"></button>
     <button class="link" id="shCancel"></button>
   </div>
@@ -498,7 +504,6 @@ body.offline main,body.offline .menubar .mitem,body.offline .pop,body.offline .p
   <div class="sheet" aria-live="polite">
     <div class="c" id="clIco"></div>
     <b id="clTitle"></b>
-    <code id="clCode"></code>
     <p id="clText"></p>
     <button class="btn" id="clGo" hidden></button>
   </div>
@@ -598,8 +603,10 @@ const $=id=>document.getElementById(id);
                    a ticket with a QR code. Scanning it and signing in links the printer. Meanwhile the
                    cloud popover says where things stand (showCloudPop).
      linked     -> "Open TikPrint Cloud" (short: "Cloud"), opens the cloud at this printer
-   If the board can't be asked, the buttons go back to "Upgrade to Pro". */
-let cloud={linked:false,state:'local',code:'',message:'',printer_id:'',cloud_url:''};
+   If the board can't be asked, the buttons go back to "Upgrade to Pro".
+   Paper is the proof: this page is open to everyone on the same Wi-Fi, so it never gets the pairing code
+   (the board keeps it; it is on the ticket only), and unlinking asks for a code from a ticket of its own. */
+let cloud={linked:false,state:'local',message:'',printer_id:'',cloud_url:''};
 const cloudLabel=()=>cloud.linked?'Open TikPrint Cloud':'Upgrade to Pro';
 function showCloud(){
   showCloudPop();
@@ -620,11 +627,12 @@ function openCloud(){
   // After this click has run its course: a click anywhere outside a popover closes them all.
   setTimeout(()=>{
     closeAll('cloudPop'); $('cloudPop').classList.add('open');
-    if(cloud.state==='starting'||cloud.state==='pairing')showCloudPop();   // a ticket is out already: show its code again
+    if(cloud.state==='starting'||cloud.state==='pairing')showCloudPop();   // a ticket is out already: point at it again
     else startLinking();
   },0);
 }
-/* Ask the board to get a pairing code and print the ticket. Only this makes a printer call the cloud. */
+/* Ask the board to get a pairing code and print the ticket. Only this makes a printer call the cloud.
+   The board takes this once in 30 seconds (every time is a ticket): sooner, it says how long to wait. */
 let linkAskedAt=0;
 async function startLinking(){
   linkAskedAt=Date.now(); cloud.state='starting'; showCloudPop();
@@ -637,32 +645,61 @@ function showCloudPop(){
   if(!$('cloudPop').classList.contains('open'))return;
   const site=cloud.cloud_url.replace(/^https?:\/\//,'').replace(/\/+$/,'');
   const o=cloud.linked?{icon:'ok',tone:'ok',title:'Linked',go:'Open TikPrint Cloud',act:openCloudSite}:
-    cloud.state==='pairing'?{icon:'wait',title:'Scan the ticket to link',code:cloud.code,text:site?`or type the code at\n${site}/link`:''}:
+    cloud.state==='pairing'?{icon:'wait',title:'Scan the ticket that just printed',text:site?`or type the code on it at\n${site}/link`:''}:
     cloud.state==='expired'?{icon:'bad',title:'Code expired',go:'Try again',act:startLinking}:
     cloud.state==='failed'?{icon:'bad',tone:'bad',title:'Couldn’t link',text:cloud.message,go:'Try again',act:startLinking}:
     cloud.state==='starting'||Date.now()-linkAskedAt<4000?{icon:'wait',title:'Getting a code'}:   // the board may not have heard yet
     {icon:'up',title:'Upgrade to Pro',go:'Link this printer',act:startLinking};
-  const key=JSON.stringify([o.title,o.code,o.text]); if($('cloudPop').dataset.shown===key)return;   // nothing changed: leave the spinner turning
+  const key=JSON.stringify([o.title,o.text]); if($('cloudPop').dataset.shown===key)return;   // nothing changed: leave the spinner turning
   $('cloudPop').dataset.shown=key;
   $('clIco').className='c'+(o.tone?' '+o.tone:''); $('clIco').innerHTML=SHEET_ICONS[o.icon];
-  $('clTitle').textContent=o.title; $('clCode').textContent=o.code||''; $('clText').textContent=o.text||'';
+  $('clTitle').textContent=o.title; $('clText').textContent=o.text||'';
   $('clGo').hidden=!o.go; $('clGo').textContent=o.go||''; $('clGo').onclick=o.act||null;
 }
-/* Settings > Reset / Unlink: the board deletes its token at once and is local only again. It tells the
-   cloud if it can; if it can't, the website lists the printer until it is removed there. */
+/* Settings > Reset / Unlink, in two steps, because anyone on the Wi-Fi can open this page:
+     1. the board prints a ticket with a 6-digit code (good for 2 minutes) and unlinks nothing yet
+     2. the code is typed in here. Only then does the board delete its token and go back to local only.
+        It tells the cloud if it can; if it can't, the website lists the printer until it is removed there.
+   Five wrong codes cancel the code: a new ticket has to be printed. */
+let unlinkCodeUntil=0;   // a ticket with a code is out, as far as this page knows, until then
 function askUnlink(){
-  showSheet({icon:'bad',title:'Unlink this printer?',text:'It goes back to printing from this page only.',go:'Unlink',cancel:'Cancel'});
+  if(Date.now()<unlinkCodeUntil){typeUnlinkCode(); return}   // the sheet was closed with a good code still out: straight back to typing it
+  showSheet({icon:'bad',title:'Unlink this printer?',text:'It goes back to printing from this page only.\nThe printer prints a code first, to check you are next to it.',go:'Print the code',cancel:'Cancel'});
+  $('shGo').onclick=printUnlinkCode;
+}
+async function printUnlinkCode(){
+  $('shGo').disabled=true;
+  let r=null; try{r=await api('/api/cloud/unlink',{},8000)}catch(e){}
+  $('shGo').disabled=false;
+  if(r&&r.ok){unlinkCodeUntil=Date.now()+(r.expires_in_s||120)*1000; typeUnlinkCode(); return}
+  if(r&&r.error==='not_linked'){closeSheet(); await refreshCloud(); toast('Printer is not linked'); return}
+  showSheet({icon:'bad',tone:'bad',title:'Couldn’t print the code',text:(r&&r.message)||'Can’t reach the printer',go:'Try again',cancel:'Close'});
+  $('shGo').onclick=printUnlinkCode;
+}
+function typeUnlinkCode(note){
+  showSheet({icon:'wait',title:'Type the code from the ticket',text:note||'A ticket with a 6-digit code just printed. The code is good for 2 minutes.',code:true,go:'Unlink',cancel:'Cancel'});
+  const box=$('shCode'), digits=()=>box.value.replace(/\D/g,'').slice(0,6);
+  box.oninput=()=>{box.value=digits(); $('shGo').disabled=box.value.length!==6};
+  box.onkeydown=e=>{if(e.key==='Enter'&&!$('shGo').disabled)$('shGo').click()};
+  $('shGo').disabled=true; setTimeout(()=>box.focus(),0);
   $('shGo').onclick=async()=>{
-    let r=null; try{r=await api('/api/cloud/unlink',{},5000)}catch(e){}
-    closeSheet(); await refreshCloud();
-    toast(r&&r.ok?'Printer unlinked':'Can’t reach the printer');
+    $('shGo').disabled=true;
+    let r=null; try{r=await api('/api/cloud/unlink/confirm',{code:digits()},5000)}catch(e){}
+    if(r&&r.ok){unlinkCodeUntil=0; closeSheet(); await refreshCloud(); toast('Printer unlinked'); return}
+    if(r&&r.error==='wrong_code'){typeUnlinkCode(`That code isn’t right. ${r.tries_left} ${r.tries_left===1?'try':'tries'} left.`); return}
+    if(r&&(r.error==='no_code'||r.error==='code_cancelled')){
+      unlinkCodeUntil=0;
+      showSheet({icon:'bad',tone:'bad',title:r.error==='no_code'?'That code has run out':'Too many wrong codes',text:'Print a new code to try again.',go:'Print a new code',cancel:'Cancel'});
+      $('shGo').onclick=printUnlinkCode; return;
+    }
+    typeUnlinkCode((r&&r.message)||'Can’t reach the printer. Try again.');
   };
 }
 async function refreshCloud(){
   let c=null; try{c=await api('/api/cloud/status',undefined,2500)}catch(e){}
   const ok=c&&typeof c.cloud_url==='string';
   // no answer: not linked, but the address from the last answer still opens
-  cloud={linked:!!(ok&&c.linked), state:ok&&c.state?String(c.state):'local', code:ok&&c.code?String(c.code):'', message:ok&&c.message?String(c.message):'',
+  cloud={linked:!!(ok&&c.linked), state:ok&&c.state?String(c.state):'local', message:ok&&c.message?String(c.message):'',
          printer_id:ok&&c.linked&&c.printer_id?String(c.printer_id):'', cloud_url:ok?c.cloud_url:cloud.cloud_url};
   showCloud();
   $('proBtn').style.visibility='';   // hidden until the board has been asked once, so a linked printer never flashes "Upgrade to Pro"
@@ -1062,13 +1099,14 @@ function showFirmware(s){
     u.checked_s_ago!=null?'Up to date':'<span class="go">›</span>';
 }
 
-/* The sheet. o = {icon, tone:'ok'|'bad', title, text, bar:true, go:'Install', cancel:'Not now'} */
+/* The sheet. o = {icon, tone:'ok'|'bad', title, text, bar:true, code:true (a box to type a code in), go:'Install', cancel:'Not now'} */
 function showSheet(o){
   $('gearMain').style.display='none'; $('sheet').style.display='block';
   $('shIco').className='c'+(o.tone?' '+o.tone:''); $('shIco').innerHTML=SHEET_ICONS[o.icon];
   $('shTitle').textContent=o.title; $('shText').textContent=o.text||'';
   $('shBar').style.display=o.bar?'':'none'; $('shBar').firstElementChild.style.width='0';
-  $('shGo').style.display=o.go?'':'none'; $('shGo').textContent=o.go||''; $('shGo').onclick=null;
+  $('shCode').hidden=!o.code; $('shCode').value='';
+  $('shGo').style.display=o.go?'':'none'; $('shGo').textContent=o.go||''; $('shGo').onclick=null; $('shGo').disabled=false;
   $('shCancel').style.display=o.cancel?'':'none'; $('shCancel').textContent=o.cancel||''; $('shCancel').onclick=closeSheet;
 }
 function closeSheet(){$('sheet').style.display='none'; $('gearMain').style.display=''}

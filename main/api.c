@@ -20,9 +20,12 @@
  *   POST /api/automations/weather/print-now  fetch the weather and print it now ({"kind": "today"|"rest"|"tomorrow"}, optional)
  *   POST /api/connectors            set up, switch or disconnect the connector; its schedule and look (see connectors_post)
  *   POST /api/connectors/print-now  fetch the active connector's list and print it now
- *   GET  /api/cloud/status   whether this printer is linked to TikPrint Cloud, and where the cloud is
+ *   GET  /api/cloud/status   whether this printer is linked to TikPrint Cloud, and where the cloud is (never the pairing code)
  *   POST /api/cloud/pair     "Upgrade" was pressed: get a pairing code from the cloud and print the ticket to scan
- *   POST /api/cloud/unlink   "Reset / Unlink" was pressed: delete the device token and tell the cloud
+ *   POST /api/cloud/unlink   "Reset / Unlink" was pressed: print a ticket with a 6-digit code. Nothing is unlinked yet
+ *   POST /api/cloud/unlink/confirm  {"code": "482905"}: the code from that ticket. Delete the device token and tell the cloud
+ *
+ * Linking and unlinking need a code that is printed on paper: see "TikPrint Cloud: who may link and unlink" below.
  */
 #include <string.h>
 #include <stdlib.h>
@@ -52,6 +55,7 @@
 #include "cloud_state.h"
 #include "cloud.h"
 #include "cloud_http.h"
+#include "paper_code.h"
 #include "config.h"
 #include "zip_table.h"
 #include "city_table.h"
@@ -156,7 +160,10 @@ static bool request_is_from_usb_cable(httpd_req_t *req)
 /* Was this request sent by the TikPrint page itself (or by a tool like curl)?
  * A browser adds an "Origin" header saying which site the page that sent the request came
  * from. If that is some other website, the request is refused: otherwise any web page open
- * on a computer near the board could quietly send it new firmware. curl sends no Origin. */
+ * on a computer near the board could quietly send it new firmware. curl sends no Origin.
+ * THIS IS NOT A LOCK. It stops other websites, not people: anyone on the same network can send
+ * any request with any Origin they like. What only the owner may do needs more than this: the
+ * USB cable (request_is_from_usb_cable) or a code printed on paper (the /api/cloud routes). */
 static bool request_is_same_site(httpd_req_t *req)
 {
     char origin[160] = "", host[128] = "", expect[160];
@@ -925,7 +932,9 @@ static esp_err_t print_post(httpd_req_t *req)
 
 /* ---------- GET /api/last-ticket ----------
  * The last ticket that STARTED printing. The printer task replaces it when the next
- * ticket starts, so it is only read between printer_last_job_lock() and ..._unlock(). */
+ * ticket starts, so it is only read between printer_last_job_lock() and ..._unlock().
+ * A ticket that carries a pairing or unlink code ("secret": true) shows its number and title only:
+ * its words and picture were never kept (see remember() in printer_fake.c). */
 static esp_err_t last_ticket_get(httpd_req_t *req)
 {
     const printer_job_t *job = printer_last_job_lock();
@@ -940,6 +949,9 @@ static esp_err_t last_ticket_get(httpd_req_t *req)
     cJSON_AddStringToObject(root, "title", job->title);
     cJSON_AddStringToObject(root, "body", job->body);
     cJSON_AddStringToObject(root, "source", job->source);
+    if (job->secret) {
+        cJSON_AddBoolToObject(root, "secret", true);
+    }
     if (job->image) {
         cJSON *img = cJSON_AddObjectToObject(root, "image");
         cJSON_AddNumberToObject(img, "width", PRINTER_WIDTH_DOTS);
@@ -1598,14 +1610,43 @@ static esp_err_t connectors_print_now_post(httpd_req_t *req)
     return send_json(req, root);
 }
 
+/*
+ * ---------- TikPrint Cloud: who may link and unlink ----------
+ * Everything under /api is open to everyone on the same Wi-Fi. request_is_same_site() only keeps
+ * other websites' pages out of it: a tool like curl sends whatever Origin it likes. So nothing here
+ * can change who owns the printer on a request alone. It takes a code that is printed on paper, and
+ * so someone standing at the printer:
+ *   linking    the pairing code is on the ticket and nowhere in this API
+ *   unlinking  POST /api/cloud/unlink only prints a code; POST /api/cloud/unlink/confirm needs it back
+ * Both tickets are "secret" (printer_job_t.secret): /api/last-ticket and /api/last-ticket.pbm show
+ * their number and title, never their words or picture. And each can be asked for only once in
+ * CLOUD_TICKET_EVERY_S seconds, so the paper roll cannot be emptied from the network.
+ */
+
+/* Say "not yet": 429 with "retry_in_s". */
+static esp_err_t refuse_too_soon(httpd_req_t *req, int wait_s)
+{
+    char message[64];
+    snprintf(message, sizeof(message), "Wait %d second%s, then try again", wait_s, wait_s == 1 ? "" : "s");
+    cJSON *root = cJSON_CreateObject();
+    httpd_resp_set_status(req, "429 Too Many Requests");
+    cJSON_AddBoolToObject(root, "ok", false);
+    cJSON_AddStringToObject(root, "error", "too_soon");
+    cJSON_AddStringToObject(root, "message", message);
+    cJSON_AddNumberToObject(root, "retry_in_s", wait_s);
+    return send_json(req, root);
+}
+
 /* ---------- GET /api/cloud/status ----------
  * Whether this printer is linked to TikPrint Cloud ("Pro"), for the page's Pro buttons:
  *   {"linked":false,"state":"local","cloud_url":"https://..."}
- *   {"linked":false,"state":"pairing","code":"K7QM-3XPD","expires_in_s":512,"cloud_url":"https://..."}
+ *   {"linked":false,"state":"pairing","expires_in_s":512,"cloud_url":"https://..."}
  *   {"linked":true,"state":"linked","printer_id":"...","cloud_url":"https://..."}
  * "state" is where linking stands (see cloud_phase_t in cloud.h): "local", "starting" (getting a code),
- * "pairing" (the ticket is out: "code" is the code on it), "linked", "expired" (nobody confirmed in
- * time) or "failed" ("message" says why).
+ * "pairing" (the ticket is out, good for "expires_in_s" more seconds), "linked", "expired" (nobody
+ * confirmed in time) or "failed" ("message" says why).
+ * THE PAIRING CODE IS NEVER IN THIS ANSWER. It is on the ticket only: whoever can read this could
+ * otherwise link the printer to an account of their own without ever seeing the printer.
  * Every answer also says what the board has been doing, so it can be checked without a serial cable:
  *   "calls_since_boot"  calls sent to TikPrint Cloud since the board started. A printer that is not
  *                       linked, and where nobody pressed Upgrade, stays at 0 however long it runs
@@ -1616,7 +1657,7 @@ static esp_err_t connectors_print_now_post(httpd_req_t *req)
  *   "polling"           whether the cloud task is running (false on a printer that is not linked)
  *   "firmware"          the version that is running
  * It only reads what the board knows: nothing is asked of the cloud.
- * The device token and the device secret are never sent back. */
+ * The device token, the device secret and the unlink code are never sent back either. */
 static esp_err_t cloud_status_get(httpd_req_t *req)
 {
     char printer_id[CLOUD_PRINTER_ID_MAX];
@@ -1629,7 +1670,6 @@ static esp_err_t cloud_status_get(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "linked", linked);
     cJSON_AddStringToObject(root, "state", cloud_phase_name(phase));
     if (phase == CLOUD_PAIRING) {
-        cJSON_AddStringToObject(root, "code", st.code);
         cJSON_AddNumberToObject(root, "expires_in_s", st.expires_in_s);
     }
     if (phase == CLOUD_FAILED) {
@@ -1653,7 +1693,9 @@ static esp_err_t cloud_status_get(httpd_req_t *req)
  * "Upgrade to Pro" was pressed on the page of a printer that is not linked. This is the one thing
  * that makes a printer call the cloud for the first time: it asks for a pairing code and prints a
  * ticket with a QR code to scan. Replies {"ok":true} at once; how it goes shows up in
- * /api/cloud/status ("state": starting, then pairing, then linked / expired / failed). */
+ * /api/cloud/status ("state": starting, then pairing, then linked / expired / failed).
+ * The code is on the ticket and nowhere else. Every call prints a ticket, so it is accepted once in
+ * CLOUD_TICKET_EVERY_S seconds: sooner gets 429 "too_soon" with "retry_in_s". */
 static esp_err_t cloud_pair_post(httpd_req_t *req)
 {
     if (!request_is_same_site(req)) {
@@ -1664,9 +1706,13 @@ static esp_err_t cloud_pair_post(httpd_req_t *req)
     if (!w.connected) {
         return refuse(req, "409 Conflict", "no_wifi", "Connect the printer to Wi-Fi first");
     }
-    esp_err_t err = cloud_pair();
+    int wait_s = 0;
+    esp_err_t err = cloud_pair(&wait_s);
     if (err == ESP_ERR_INVALID_STATE) {
         return refuse(req, "409 Conflict", "already_linked", "This printer is already linked");
+    }
+    if (err == ESP_ERR_NOT_FINISHED) {
+        return refuse_too_soon(req, wait_s);
     }
     if (err != ESP_OK) {
         return refuse(req, "500 Internal Server Error", "no_memory", "The printer is out of memory");
@@ -1677,16 +1723,83 @@ static esp_err_t cloud_pair_post(httpd_req_t *req)
 }
 
 /* ---------- POST /api/cloud/unlink ----------
- * "Reset / Unlink" was pressed in Settings. The device token is deleted before this replies, so the
- * printer is local only from now on, whether or not the cloud can be reached to be told.
- * Replies {"ok":true,"linked":false}. */
+ * "Reset / Unlink" was pressed in Settings. NOTHING IS UNLINKED YET: the printer prints a ticket with
+ * a 6-digit code, good for 2 minutes, and waits for it at /api/cloud/unlink/confirm. No body.
+ * Replies {"ok":true,"expires_in_s":120,"tries":5}. The code is on the ticket only.
+ * A new call makes a new code and cancels the one before. Every call prints a ticket, so it is
+ * accepted once in CLOUD_TICKET_EVERY_S seconds: sooner gets 429 "too_soon" with "retry_in_s".
+ * Also: 409 "not_linked", 503 "no_ticket" (the ticket could not join the print queue). */
 static esp_err_t cloud_unlink_post(httpd_req_t *req)
 {
     if (!request_is_same_site(req)) {
         return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
     }
-    cloud_unlink();
+    int expires_in_s = 0, wait_s = 0;
+    esp_err_t err = cloud_unlink_request(&expires_in_s, &wait_s);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return refuse(req, "409 Conflict", "not_linked", "This printer is not linked");
+    }
+    if (err == ESP_ERR_NOT_FINISHED) {
+        return refuse_too_soon(req, wait_s);
+    }
+    if (err != ESP_OK) {
+        return refuse(req, "503 Service Unavailable", "no_ticket", "The ticket with the code could not print. Try again in a moment");
+    }
     cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "expires_in_s", expires_in_s);
+    cJSON_AddNumberToObject(root, "tries", PAPER_CODE_TRIES);
+    return send_json(req, root);
+}
+
+/* ---------- POST /api/cloud/unlink/confirm ----------
+ *   {"code":"482905"}   the code from the unlink ticket (spaces and dashes in it are ignored)
+ * If it is right, the device token is deleted before this replies, so the printer is local only
+ * from now on, whether or not the cloud can be reached to be told. Replies {"ok":true,"linked":false}.
+ * If not:
+ *   400 "bad_code"        that is not 6 digits. It is not checked, and costs no guess
+ *   403 "wrong_code"      wrong; "tries_left" says how many guesses are left
+ *   410 "code_cancelled"  wrong for the 5th time: the code is gone, print a new ticket
+ *   410 "no_code"         there is no code to check against: none was printed, or its 2 minutes are up
+ * The check takes the same time for every wrong code (paper_code_check). */
+static esp_err_t cloud_unlink_confirm_post(httpd_req_t *req)
+{
+    if (!request_is_same_site(req)) {
+        return refuse(req, "403 Forbidden", "other_site", "This request did not come from the TikPrint page");
+    }
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const cJSON *jcode = cJSON_GetObjectItem(body, "code");
+    char code[PAPER_CODE_DIGITS + 2] = "";   // one more than a code, so that one too long is seen to be
+    size_t n = 0;
+    for (const char *p = cJSON_IsString(jcode) ? jcode->valuestring : ""; *p && n < sizeof(code) - 1; p++) {
+        if (*p != ' ' && *p != '-') {
+            code[n++] = *p;
+        }
+    }
+    cJSON_Delete(body);
+    if (!paper_code_looks_right(code)) {
+        return refuse(req, "400 Bad Request", "bad_code", "Type the 6 digits from the ticket");
+    }
+    int tries_left = 0;
+    esp_err_t err = cloud_unlink_confirm(code, &tries_left);
+    if (err == ESP_ERR_NOT_FOUND) {
+        return refuse(req, "410 Gone", "no_code", "That code is no longer good. Print a new one");
+    }
+    if (err != ESP_OK && tries_left <= 0) {
+        return refuse(req, "410 Gone", "code_cancelled", "Too many wrong codes. Print a new one");
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        cJSON_AddBoolToObject(root, "ok", false);
+        cJSON_AddStringToObject(root, "error", "wrong_code");
+        cJSON_AddStringToObject(root, "message", "That code isn't right. Check the ticket");
+        cJSON_AddNumberToObject(root, "tries_left", tries_left);
+        return send_json(req, root);
+    }
     cJSON_AddBoolToObject(root, "ok", true);
     cJSON_AddBoolToObject(root, "linked", cloud_state_is_linked());
     return send_json(req, root);
@@ -1750,6 +1863,7 @@ void api_register(httpd_handle_t server)
         { .uri = "/api/cloud/status", .method = HTTP_GET, .handler = cloud_status_get },
         { .uri = "/api/cloud/pair", .method = HTTP_POST, .handler = cloud_pair_post },
         { .uri = "/api/cloud/unlink", .method = HTTP_POST, .handler = cloud_unlink_post },
+        { .uri = "/api/cloud/unlink/confirm", .method = HTTP_POST, .handler = cloud_unlink_confirm_post },
 #if CLOUD_DEBUG_FAKE_LINK
         { .uri = "/api/cloud/debug-link", .method = HTTP_POST, .handler = cloud_debug_link_post },
 #endif
