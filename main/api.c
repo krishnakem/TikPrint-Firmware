@@ -60,7 +60,7 @@ static const char *TAG = "api";
 #define MAX_BODY 512
 #define MAX_NETS 24
 #define MAX_PRINT_META (32 * 1024)     // a ticket of printer-font lines lists every line in its JSON
-#define MAX_PRINT_BODY (4 + MAX_PRINT_META + PRINTER_MAX_ROWS * PRINTER_WIDTH_BYTES)
+#define MAX_PRINT_BODY API_PRINT_BODY_MAX
 #define UPDATE_CHUNK 4096          // a firmware upload is written to flash in pieces of this size
 #define UPDATE_MAX_STALLS 6        // give up on an upload after this many 5 s waits in a row with no data
 #define UPDATE_LOG_EVERY (256 * 1024)
@@ -814,13 +814,80 @@ bad:
     return NULL;
 }
 
+esp_err_t api_print_body(const uint8_t *buf, size_t len, printer_done_fn done, void *ctx,
+                         printer_ticket_t *ticket, const char **error, const char **message)
+{
+#define REFUSE(err, code, text) do { *error = (code); *message = (text); ret = (err); goto out; } while (0)
+    esp_err_t ret = ESP_OK;
+    uint8_t *layout = NULL;
+    cJSON *meta = NULL;
+    if (len < 4 || len > MAX_PRINT_BODY) {
+        REFUSE(ESP_ERR_INVALID_ARG, "bad_size", "The ticket is empty or too large");
+    }
+    uint32_t meta_len = buf[0] | (buf[1] << 8) | (buf[2] << 16) | ((uint32_t)buf[3] << 24);
+    meta = (meta_len <= MAX_PRINT_META && 4 + meta_len <= len)
+           ? cJSON_ParseWithLength((const char *)buf + 4, meta_len) : NULL;
+    if (!meta) {
+        REFUSE(ESP_ERR_INVALID_ARG, "bad_request", "The ticket could not be read");
+    }
+
+    const cJSON *jt = cJSON_GetObjectItem(meta, "title");
+    const cJSON *jb = cJSON_GetObjectItem(meta, "body");
+    const cJSON *js = cJSON_GetObjectItem(meta, "source");
+    const cJSON *jimg = cJSON_GetObjectItem(meta, "image");
+    printer_job_t job = {
+        .title = cJSON_IsString(jt) ? jt->valuestring : "",
+        .body = cJSON_IsString(jb) ? jb->valuestring : "",
+        .source = cJSON_IsString(js) ? js->valuestring : "",
+    };
+
+    if (cJSON_IsObject(jimg)) {
+        int w = cJSON_GetObjectItem(jimg, "width") ? cJSON_GetObjectItem(jimg, "width")->valueint : 0;
+        int h = cJSON_GetObjectItem(jimg, "height") ? cJSON_GetObjectItem(jimg, "height")->valueint : 0;
+        size_t img_bytes = len - 4 - meta_len;
+        if (w != PRINTER_WIDTH_DOTS || h < 1 || h > PRINTER_MAX_ROWS || img_bytes != (size_t)h * PRINTER_WIDTH_BYTES) {
+            REFUSE(ESP_ERR_INVALID_ARG, "bad_image", "The image is not in the expected format");
+        }
+        job.image = buf + 4 + meta_len;
+        job.image_rows = h;
+        job.text_in_image = cJSON_IsTrue(cJSON_GetObjectItem(meta, "text_in_image"));
+    }
+    const cJSON *jparts = cJSON_GetObjectItem(meta, "parts");
+    if (cJSON_IsArray(jparts) && cJSON_GetArraySize(jparts) > 0) {
+        layout = build_layout(jparts, job.image_rows, meta_len, &job.layout_len);
+        if (!layout) {
+            REFUSE(ESP_ERR_INVALID_ARG, "bad_layout", "The ticket's layout could not be read");
+        }
+        job.layout = layout;
+        job.text_in_image = true;   // the page laid the whole ticket out, text included
+    }
+    if (!job.title[0] && !job.body[0] && !job.image) {
+        REFUSE(ESP_ERR_INVALID_ARG, "empty", "Nothing to print");
+    }
+
+    // The queue copies the job (so the caller can free buf) and gives it its ticket number.
+    esp_err_t perr = printer_print_job_tracked(&job, ticket, done, ctx);
+    if (perr == ESP_ERR_INVALID_STATE) {
+        REFUSE(ESP_ERR_INVALID_STATE, "queue_full", "The print queue is full, try again in a moment");
+    }
+    if (perr != ESP_OK) {
+        REFUSE(ESP_ERR_NO_MEM, "no_memory", "The printer is out of memory");
+    }
+
+out:
+    cJSON_Delete(meta);
+    free(layout);
+    return ret;
+#undef REFUSE
+}
+
 static esp_err_t print_post(httpd_req_t *req)
 {
     size_t len = req->content_len;
     if (len < 4 || len > MAX_PRINT_BODY) {
         return print_fail(req, "bad_size", "The ticket is empty or too large");
     }
-    uint8_t *buf = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);  // up to ~300 KB: use the big external RAM
+    uint8_t *buf = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);  // up to ~600 KB: use the big external RAM
     if (!buf) {
         return print_fail(req, "no_memory", "The printer is out of memory");
     }
@@ -837,63 +904,12 @@ static esp_err_t print_post(httpd_req_t *req)
         got += n;
     }
 
-    uint32_t meta_len = buf[0] | (buf[1] << 8) | (buf[2] << 16) | ((uint32_t)buf[3] << 24);
-    cJSON *meta = (meta_len <= MAX_PRINT_META && 4 + meta_len <= len)
-                  ? cJSON_ParseWithLength((const char *)buf + 4, meta_len) : NULL;
-    if (!meta) {
-        free(buf);
-        return print_fail(req, "bad_request", "The ticket could not be read");
-    }
-
-    esp_err_t ret;
-    uint8_t *layout = NULL;
-    const cJSON *jt = cJSON_GetObjectItem(meta, "title");
-    const cJSON *jb = cJSON_GetObjectItem(meta, "body");
-    const cJSON *js = cJSON_GetObjectItem(meta, "source");
-    const cJSON *jimg = cJSON_GetObjectItem(meta, "image");
-    printer_job_t job = {
-        .title = cJSON_IsString(jt) ? jt->valuestring : "",
-        .body = cJSON_IsString(jb) ? jb->valuestring : "",
-        .source = cJSON_IsString(js) ? js->valuestring : "",
-    };
-
-    if (cJSON_IsObject(jimg)) {
-        int w = cJSON_GetObjectItem(jimg, "width") ? cJSON_GetObjectItem(jimg, "width")->valueint : 0;
-        int h = cJSON_GetObjectItem(jimg, "height") ? cJSON_GetObjectItem(jimg, "height")->valueint : 0;
-        size_t img_bytes = len - 4 - meta_len;
-        if (w != PRINTER_WIDTH_DOTS || h < 1 || h > PRINTER_MAX_ROWS || img_bytes != (size_t)h * PRINTER_WIDTH_BYTES) {
-            ret = print_fail(req, "bad_image", "The image is not in the expected format");
-            goto out;
-        }
-        job.image = buf + 4 + meta_len;
-        job.image_rows = h;
-        job.text_in_image = cJSON_IsTrue(cJSON_GetObjectItem(meta, "text_in_image"));
-    }
-    const cJSON *jparts = cJSON_GetObjectItem(meta, "parts");
-    if (cJSON_IsArray(jparts) && cJSON_GetArraySize(jparts) > 0) {
-        layout = build_layout(jparts, job.image_rows, meta_len, &job.layout_len);
-        if (!layout) {
-            ret = print_fail(req, "bad_layout", "The ticket's layout could not be read");
-            goto out;
-        }
-        job.layout = layout;
-        job.text_in_image = true;   // the page laid the whole ticket out, text included
-    }
-    if (!job.title[0] && !job.body[0] && !job.image) {
-        ret = print_fail(req, "empty", "Nothing to print");
-        goto out;
-    }
-
-    // The queue copies the job (so buf can be freed below) and gives it its ticket number.
     printer_ticket_t ticket;
-    esp_err_t perr = printer_print_job(&job, &ticket);
-    if (perr == ESP_ERR_INVALID_STATE) {
-        ret = print_fail(req, "queue_full", "The print queue is full, try again in a moment");
-        goto out;
-    }
-    if (perr != ESP_OK) {
-        ret = print_fail(req, "no_memory", "The printer is out of memory");
-        goto out;
+    const char *error = "", *message = "";
+    esp_err_t err = api_print_body(buf, len, NULL, NULL, &ticket, &error, &message);
+    free(buf);
+    if (err != ESP_OK) {
+        return print_fail(req, error, message);
     }
 
     cJSON *root = cJSON_CreateObject();
@@ -902,13 +918,7 @@ static esp_err_t print_post(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "ticket_count", ticket.number);
     cJSON_AddBoolToObject(root, "queued", ticket.position > 0);
     cJSON_AddNumberToObject(root, "position", ticket.position);
-    ret = send_json(req, root);
-
-out:
-    cJSON_Delete(meta);
-    free(layout);
-    free(buf);
-    return ret;
+    return send_json(req, root);
 }
 
 /* ---------- GET /api/last-ticket ----------

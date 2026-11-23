@@ -28,6 +28,19 @@ esp_err_t print_queue_init(print_queue_print_fn print_fn, print_queue_ready_fn r
  */
 esp_err_t print_queue_add(const printer_job_t *job, printer_ticket_t *ticket);
 
+/**
+ * Told when a ticket has left the queue: result is ESP_OK if the whole ticket was sent to the
+ * printer, anything else if the printer gave up on it. It is not called while the ticket is only
+ * waiting (in line, or held back for paper or an open cover): only once, at the end.
+ * It runs on the queue's task, so it must be quick and must not print.
+ */
+typedef void (*print_queue_done_fn)(void *ctx, esp_err_t result);
+
+/** Like print_queue_add(), and done(ctx, result) is called when the ticket has printed or failed.
+ *  If this returns an error the ticket did not join the queue and done is never called. */
+esp_err_t print_queue_add_tracked(const printer_job_t *job, printer_ticket_t *ticket,
+                                  print_queue_done_fn done, void *ctx);
+
 /** How many jobs are waiting, whether one is printing right now, and whether the
  *  queue is paused (tickets are waiting for paper or for the cover to be closed). */
 void print_queue_get_info(int *waiting, bool *printing, bool *paused);

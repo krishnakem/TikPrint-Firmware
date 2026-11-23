@@ -38,6 +38,8 @@ static const char *TAG = "print_queue";
 typedef struct {
     printer_job_t job;
     size_t image_bytes;
+    print_queue_done_fn done;   // who to tell when it has printed or failed, or NULL
+    void *done_ctx;
 } queued_job_t;
 
 static print_queue_print_fn s_print;
@@ -93,6 +95,12 @@ static bool has_room(const printer_job_t *job)
 
 esp_err_t print_queue_add(const printer_job_t *job, printer_ticket_t *ticket)
 {
+    return print_queue_add_tracked(job, ticket, NULL, NULL);
+}
+
+esp_err_t print_queue_add_tracked(const printer_job_t *job, printer_ticket_t *ticket,
+                                  print_queue_done_fn done, void *ctx)
+{
     esp_err_t err = ESP_OK;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     queued_job_t *q = NULL;
@@ -102,6 +110,8 @@ esp_err_t print_queue_add(const printer_job_t *job, printer_ticket_t *ticket)
     } else if ((q = copy_job(job)) == NULL) {
         err = ESP_ERR_NO_MEM;
     } else {
+        q->done = done;
+        q->done_ctx = ctx;
         // Number it now, while holding the lock: numbers follow the order in line.
         q->job.number = counter_increment();
         ticket->number = q->job.number;
@@ -183,8 +193,12 @@ static void queue_task(void *arg)
             continue;
         }
         ESP_LOGI(TAG, "ticket #%04u starts printing", (unsigned)q->job.number);
-        if (s_print(&q->job) != ESP_OK) {
+        esp_err_t result = s_print(&q->job);
+        if (result != ESP_OK) {
             ESP_LOGE(TAG, "ticket #%04u failed to print", (unsigned)q->job.number);
+        }
+        if (q->done) {
+            q->done(q->done_ctx, result);   // whoever sent it wants to know (a cloud job reports back)
         }
         finish(q);
     }
