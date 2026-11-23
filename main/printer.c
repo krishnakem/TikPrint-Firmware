@@ -118,6 +118,11 @@ esp_err_t printer_print_job(const printer_job_t *job, printer_ticket_t *ticket)
     return print_queue_add(job, ticket);
 }
 
+esp_err_t printer_print_job_tracked(const printer_job_t *job, printer_ticket_t *ticket, printer_done_fn done, void *ctx)
+{
+    return print_queue_add_tracked(job, ticket, done, ctx);
+}
+
 void printer_queue_info(int *waiting, bool *printing, bool *paused)
 {
     print_queue_get_info(waiting, printing, paused);

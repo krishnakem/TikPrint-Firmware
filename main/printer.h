@@ -106,6 +106,13 @@ esp_err_t printer_init(void);
  */
 esp_err_t printer_print_job(const printer_job_t *job, printer_ticket_t *ticket);
 
+/** Called when a ticket has printed (ESP_OK) or the printer gave up on it. See print_queue.h. */
+typedef void (*printer_done_fn)(void *ctx, esp_err_t result);
+
+/** Like printer_print_job(), and done(ctx, result) is called once the ticket has printed or failed
+ *  (not while it is only waiting for its turn, for paper or for the cover to be closed). */
+esp_err_t printer_print_job_tracked(const printer_job_t *job, printer_ticket_t *ticket, printer_done_fn done, void *ctx);
+
 /** How many jobs are waiting in the queue, whether one is printing right now, and whether
  *  the queue is paused (waiting for paper, or for the cover to be closed). */
 void printer_queue_info(int *waiting, bool *printing, bool *paused);
